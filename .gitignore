@@ -1,1 +1,16 @@
 .claude/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+
+# Battlesnake CLI binary, if you drop it in the repo folder
+battlesnake
+battlesnake.exe
+
+# Editors
+.vscode/
+.idea/
