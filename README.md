@@ -7,8 +7,8 @@ project for behavior trees, pathfinding, and (later) RL environments.
 
 ```
 server.py            HTTP endpoints (GET /, POST /start /move /end). No strategy.
-agent/strategy.py    decide(game_state) -> "up" | "down" | "left" | "right"
-agent/world.py       (Milestone 2) parse JSON into a World object
+agent/world.py       World.from_json(game_state): board, my snake, enemies, food
+agent/strategy.py    decide(world) -> "up" | "down" | "left" | "right"
 agent/pathfind.py    (Milestone 3) BFS / flood fill
 tests/               pytest tests
 ```
@@ -71,6 +71,8 @@ game it also names the winner). The
 server terminal logs `GAME START`, one `TURN n -> move` line per turn, and
 `GAME OVER`.
 
-At this stage the snake moves randomly. It never runs into walls or bodies
-on the very next turn, but it can trap itself or starve. The next milestones
-fix that.
+At this stage (Milestone 2) the snake still moves randomly, but only among
+safe moves. It never runs into a wall or a body. It knows a tail moves out of
+the way unless that snake just ate. It also avoids cells where an enemy of
+equal or greater length could move its head. It can still wander into a dead
+end or starve; Milestones 3 and 4 fix that.
