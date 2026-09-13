@@ -1,0 +1,5 @@
+[tool.pytest.ini_options]
+# Lets tests `import agent` / `import server` when you run plain `pytest`
+# from the repo root.
+pythonpath = ["."]
+testpaths = ["tests"]
