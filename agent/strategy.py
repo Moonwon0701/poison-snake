@@ -1,44 +1,58 @@
-"""Decision logic: given a game state, choose a move.
+"""Decision logic: given a World, choose a move.
 
-Milestone 1 placeholder: pick a random move that doesn't kill us on the
-very next turn (off the board, or into any snake's body). Later milestones
-replace the raw JSON dict with a World object (agent/world.py) and grow
-this into a behavior tree.
+Milestone 2: survival only. Drop moves that die this turn (walls, bodies)
+and, when there's a choice, moves that risk losing a head-to-head
+collision. Then pick randomly among what's left. Milestone 3 adds food
+seeking; Milestone 5 turns this into a behavior tree.
 """
 
 import random
 
-# How each move changes (x, y). Battlesnake puts (0, 0) at the BOTTOM-left
-# corner, so "up" is y + 1 -- the opposite of most screen coordinates.
-MOVES = {
-    "up": (0, 1),
-    "down": (0, -1),
-    "left": (-1, 0),
-    "right": (1, 0),
-}
+from agent.world import MOVES, Point, World, step
 
 
-def decide(game_state: dict) -> str:
-    board = game_state["board"]
-    head = game_state["you"]["head"]
+def survivable_moves(world: World) -> list[str]:
+    """Moves that don't run into a wall or a snake body."""
+    blocked = world.blocked_next_turn()
+    moves = []
+    for move in MOVES:
+        target = step(world.me.head, move)
+        if world.in_bounds(target) and target not in blocked:
+            moves.append(move)
+    return moves
 
-    # Every square covered by any snake (including us). Tails are treated
-    # as blocked too, which is slightly too cautious -- a tail usually moves
-    # away next turn. Milestone 2 handles that properly.
-    occupied = set()
-    for snake in board["snakes"]:
-        for segment in snake["body"]:
-            occupied.add((segment["x"], segment["y"]))
 
-    safe_moves = []
-    for move, (dx, dy) in MOVES.items():
-        x, y = head["x"] + dx, head["y"] + dy
-        on_board = 0 <= x < board["width"] and 0 <= y < board["height"]
-        if on_board and (x, y) not in occupied:
-            safe_moves.append(move)
+def head_to_head_danger(world: World) -> set[Point]:
+    """Cells where an enemy at least as long as us could put its head.
 
-    if not safe_moves:
+    When two heads land on the same cell, the shorter snake dies, and equal
+    lengths kill both. We can't know which way the enemy will turn, so every
+    cell next to its head counts as dangerous.
+    """
+    danger = set()
+    for enemy in world.enemies:
+        if enemy.length >= world.me.length:
+            for move in MOVES:
+                danger.add(step(enemy.head, move))
+    return danger
+
+
+def safe_moves(world: World) -> list[str]:
+    """Survivable moves, minus head-to-head risks if anything else is left.
+
+    A risky move might still work out (the enemy may turn away); a wall never
+    does. So if every survivable move is risky, keep them all.
+    """
+    survivable = survivable_moves(world)
+    danger = head_to_head_danger(world)
+    calm = [m for m in survivable if step(world.me.head, m) not in danger]
+    return calm or survivable
+
+
+def decide(world: World) -> str:
+    moves = safe_moves(world)
+    if not moves:
         # Every move is fatal. Still answer quickly rather than crash --
         # a missing reply also counts as a move, so we gain nothing by failing.
         return "up"
-    return random.choice(safe_moves)
+    return random.choice(moves)

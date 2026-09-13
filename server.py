@@ -10,6 +10,7 @@ import os
 from flask import Flask, jsonify, request
 
 from agent.strategy import decide
+from agent.world import World
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 log = logging.getLogger("snake")
@@ -42,7 +43,7 @@ def start():
 @app.post("/move")
 def move():
     game_state = request.get_json()
-    chosen = decide(game_state)
+    chosen = decide(World.from_json(game_state))
     log.info("TURN %s -> %s", game_state["turn"], chosen)
     return jsonify({"move": chosen})
 
