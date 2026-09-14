@@ -57,7 +57,10 @@ class Options:
     hunt: bool = False  # go after nearby shorter snakes
 
 
-DEFAULT_OPTIONS = Options()
+# Picked with tools/ab_test.py: 2,000 games each, one challenger against three
+# snakes with every option off. All three together won 57.6% of games
+# (95% CI 55.4-59.7%); every option off won 22.4%.
+DEFAULT_OPTIONS = Options(lookahead=True, length_race=True, hunt=True)
 
 
 def distance(a: Point, b: Point) -> int:

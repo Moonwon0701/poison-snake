@@ -7,6 +7,7 @@ unless a test says otherwise. Bodies are listed head first.
 import random
 
 from agent.strategy import (
+    DEFAULT_OPTIONS,
     HUNGRY_HEALTH,
     Options,
     decide,
@@ -346,6 +347,9 @@ def test_hunt_ignores_snakes_that_are_too_far_or_not_shorter():
         assert trace[-1] == "roomiest side"
 
 
-def test_all_options_off_is_the_default_tree():
-    w = world([(5, 5), (5, 4), (5, 3)], food=[(5, 8)], health=10)
-    assert decide_with_trace(w, random.Random(1)) == decide_with_trace(w, random.Random(1), Options())
+def test_decide_uses_the_default_options():
+    assert DEFAULT_OPTIONS == Options(lookahead=True, length_race=True, hunt=True)
+    w = world(HUNTER, enemies=[[(7, 5), (8, 5), (9, 5)]])
+    default = decide_with_trace(w, random.Random(1))
+    assert default == decide_with_trace(w, random.Random(1), DEFAULT_OPTIONS)
+    assert default[1][-2:] == ["hunt", "close in"]

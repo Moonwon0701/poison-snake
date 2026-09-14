@@ -98,6 +98,28 @@ chose the move, for example:
 TURN 57 -> left [normal turn > pick one > eat > step toward food]
 ```
 
+### Head-to-head improvements
+
+After Milestone 6, three options were added to the tree to cut down
+head-to-head losses. Before that, head-to-heads caused half of all deaths in
+four-snake games:
+
+| Option | What it does |
+|---|---|
+| `lookahead` | Keeps moves that still leave an exit the turn after, away from longer enemy heads |
+| `length_race` | Also looks for food while any enemy is at least as long as us |
+| `hunt` | Closes in on a shorter snake's head within 2 moves |
+
+`tools/ab_test.py` pits one snake with some options against three snakes
+with none, for 2,000 simulated games per combination. With all three on, the
+snake won 57.6% of games, against 22.4% with none. That combination is the
+default (`DEFAULT_OPTIONS` in `agent/strategy.py`).
+
+```powershell
+python tools\ab_test.py                  # every combination, ~3 minutes on 24 cores
+python tools\ab_test.py lookahead hunt   # just these
+```
+
 ## Gymnasium environment (Milestone 6)
 
 `gym_env/` re-implements the standard Battlesnake rules in plain Python and
