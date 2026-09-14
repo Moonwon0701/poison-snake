@@ -4,7 +4,14 @@ Coordinates are (x, y) with (0, 0) at the bottom-left; the board is 11x11
 unless a test says otherwise. Bodies are listed head first.
 """
 
-from agent.strategy import HUNGRY_HEALTH, decide, move_toward_food, safe_moves
+from agent.strategy import (
+    HUNGRY_HEALTH,
+    decide,
+    move_toward_food,
+    reachable_area,
+    roomy_moves,
+    safe_moves,
+)
 from agent.world import MOVES, World
 from boards import make_state
 
@@ -155,3 +162,65 @@ def test_unreachable_food_falls_back_to_a_safe_move():
     )
     assert move_toward_food(w, safe_moves(w)) is None
     assert decide(w) in safe_moves(w)
+
+
+# --- space ------------------------------------------------------------------
+
+# A pocket in the bottom-left corner. Our head is at (1, 1) with the body
+# going up and bending left, so (0, 2) is sealed. An enemy body ends in a
+# stacked tail at (2, 0), sealing the bottom. Left and down both lead into
+# the 3-cell pocket {(0, 1), (0, 0), (1, 0)}; right leads to the open board.
+POCKET_ME = [(1, 1), (1, 2), (0, 2), (0, 3)]
+POCKET_ENEMY = [(5, 1), (4, 1), (3, 1), (3, 0), (2, 0), (2, 0)]
+
+
+def test_reachable_area_sees_the_pocket():
+    w = world(POCKET_ME, enemies=[POCKET_ENEMY])
+    assert reachable_area(w, "left") == 3
+    assert reachable_area(w, "down") == 3
+    assert reachable_area(w, "right") > 50
+
+
+def test_avoids_a_pocket_smaller_than_our_body():
+    # Left, down and right are all safe this turn, but we're 4 long and the
+    # pocket only has 3 cells.
+    w = world(POCKET_ME, enemies=[POCKET_ENEMY])
+    assert set(safe_moves(w)) == {"left", "down", "right"}
+    assert decide(w) == "right"
+
+
+def test_hungry_snake_does_not_follow_food_into_a_pocket():
+    w = world(POCKET_ME, enemies=[POCKET_ENEMY], food=[(0, 0)], health=10)
+    assert decide(w) == "right"
+
+
+# A wall made of our own body at x=3, head at the top. The tail is stacked
+# so the wall stays closed at the bottom. Left of it: 3 columns x 11 rows =
+# 33 cells. Right of it: 7 x 11 = 77 cells. Both can hold our 12-long body.
+WALL_ME = [(3, y) for y in range(10, -1, -1)] + [(3, 0)]
+
+
+def test_well_fed_snake_heads_for_the_bigger_side():
+    w = world(WALL_ME)
+    assert reachable_area(w, "left") == 33
+    assert reachable_area(w, "right") == 77
+    assert decide(w) == "right"
+
+
+def test_hungry_snake_may_eat_on_the_smaller_side_if_it_fits():
+    # 33 cells is plenty for 12 segments, so food on the left is fair game.
+    w = world(WALL_ME, food=[(1, 5)], health=10)
+    assert decide(w) == "left"
+
+
+def test_roomy_moves_keeps_every_move_that_fits():
+    assert roomy_moves({"up": 10, "left": 20}, length=8) == ["up", "left"]
+
+
+def test_roomy_moves_drops_moves_that_do_not_fit():
+    assert roomy_moves({"up": 3, "left": 20}, length=8) == ["left"]
+
+
+def test_roomy_moves_falls_back_to_the_biggest_trap():
+    # Nothing fits; the bigger trap buys more turns.
+    assert roomy_moves({"up": 3, "down": 5, "left": 5}, length=8) == ["down", "left"]

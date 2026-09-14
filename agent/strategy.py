@@ -1,16 +1,21 @@
 """Decision logic: given a World, choose a move.
 
-Milestone 3: survival first, then food. Drop moves that die this turn
-(walls, bodies) and, when there's a choice, moves that risk losing a
-head-to-head collision. If we're hungry, take the first step of the
-shortest path to the nearest food. Otherwise pick randomly among the safe
-moves. Milestone 4 adds space control; Milestone 5 turns this into a
-behavior tree.
+Milestone 4: survival, then space, then food. Each step narrows down the
+moves the next one may pick from:
+
+1. Safety: drop moves that die this turn (walls, bodies) and, when there's
+   a choice, moves that risk losing a head-to-head collision.
+2. Space: drop moves into an area too small to hold our body.
+3. Food: if we're hungry, take the first step of the shortest path to the
+   nearest food.
+4. Otherwise head for the side with the most room.
+
+Milestone 5 turns this into a behavior tree.
 """
 
 import random
 
-from agent.pathfind import shortest_path
+from agent.pathfind import flood_fill, shortest_path
 from agent.world import MOVES, Point, World, step
 
 # Go for food at this health or below. Health drops by 1 each turn and
@@ -58,13 +63,39 @@ def safe_moves(world: World) -> list[str]:
     return calm or survivable
 
 
+def reachable_area(world: World, move: str) -> int:
+    """How many cells we could still reach after making `move`.
+
+    Bodies are treated as frozen where they'll be after this turn. That's
+    cautious: every turn each tail frees another cell, so the real space
+    only grows.
+    """
+    target = step(world.me.head, move)
+    return flood_fill(target, world.blocked_next_turn(), world.width, world.height)
+
+
+def roomy_moves(areas: dict[str, int], length: int) -> list[str]:
+    """Moves whose area can hold our whole body; if none can, the roomiest.
+
+    Every turn our head fills one more cell of the area it's in. If the area
+    has fewer cells than we are long, we run out of room before our own tail
+    has left its current spot, so it's a trap. If every move is a trap, the
+    biggest one at least buys the most turns for something to open up.
+    """
+    roomy = [m for m, area in areas.items() if area >= length]
+    if roomy:
+        return roomy
+    most = max(areas.values())
+    return [m for m, area in areas.items() if area == most]
+
+
 def move_toward_food(world: World, moves: list[str]) -> str | None:
     """First step of the shortest path to the nearest food, or None.
 
-    The path must start with one of `moves`, so food never outranks safety:
-    cells next to our head that `moves` ruled out count as blocked. Bodies
-    are treated as staying put for the whole path. That's cautious, since
-    tails move away while we travel, but it keeps the search simple.
+    The path must start with one of `moves`, so food never outranks safety
+    or space: cells next to our head that `moves` ruled out count as blocked.
+    Bodies are treated as staying put for the whole path. That's cautious,
+    since tails move away while we travel, but it keeps the search simple.
     """
     head = world.me.head
     blocked = world.blocked_next_turn()
@@ -81,8 +112,14 @@ def decide(world: World) -> str:
         # Every move is fatal. Still answer quickly rather than crash --
         # a missing reply also counts as a move, so we gain nothing by failing.
         return "up"
+
+    areas = {m: reachable_area(world, m) for m in moves}
+    moves = roomy_moves(areas, world.me.length)
+
     if world.me.health <= HUNGRY_HEALTH:
         move = move_toward_food(world, moves)
         if move is not None:
             return move
-    return random.choice(moves)
+
+    most_room = max(areas[m] for m in moves)
+    return random.choice([m for m in moves if areas[m] == most_room])
