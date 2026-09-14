@@ -8,7 +8,8 @@ project for behavior trees, pathfinding, and (later) RL environments.
 ```
 server.py            HTTP endpoints (GET /, POST /start /move /end). No strategy.
 agent/world.py       World.from_json(game_state): board, my snake, enemies, food
-agent/strategy.py    decide(world) -> "up" | "down" | "left" | "right"
+agent/bt.py          hand-written behavior tree nodes (Sequence, Selector, ...)
+agent/strategy.py    decide(world) -> "up" | "down" | "left" | "right", as a BT
 agent/pathfind.py    shortest_path (BFS) and flood_fill (area counting)
 tests/               pytest tests
 ```
@@ -74,7 +75,9 @@ game it also names the winner). The
 server terminal logs `GAME START`, one `TURN n -> move` line per turn, and
 `GAME OVER`.
 
-At this stage (Milestone 4) the snake decides in priority order:
+At this stage (Milestone 5) the snake's decision is a behavior tree, built in
+`agent/strategy.py` from the node classes in `agent/bt.py`. The tree makes
+these checks in priority order:
 
 1. **Safety.** It never runs into a wall or a body. It knows a tail moves
    out of the way unless that snake just ate. It avoids cells where an enemy
@@ -85,4 +88,9 @@ At this stage (Milestone 4) the snake decides in priority order:
    nearest food, starting only with moves that passed steps 1 and 2.
 4. **Room.** Otherwise it heads for the side with the most space.
 
-Milestone 5 restructures this as an explicit behavior tree.
+Each `TURN` line in the server log ends with the branch of the tree that
+chose the move, for example:
+
+```
+TURN 57 -> left [normal turn > pick one > eat > step toward food]
+```
