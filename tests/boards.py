@@ -1,23 +1,24 @@
 """Helpers for building hand-crafted board situations in tests."""
 
 
-def make_state(my_body, enemies=(), food=(), width=11, height=11):
+def make_state(my_body, enemies=(), food=(), health=100, width=11, height=11):
     """Build a minimal game-state dict.
 
     Bodies are lists of (x, y), head first. Repeat the last cell to model a
-    snake that just ate (its tail is stacked).
+    snake that just ate (its tail is stacked). `health` is ours; enemies
+    always have 100.
     """
 
-    def snake(snake_id, body):
+    def snake(snake_id, body, health=100):
         return {
             "id": snake_id,
             "head": {"x": body[0][0], "y": body[0][1]},
             "body": [{"x": x, "y": y} for x, y in body],
-            "health": 100,
+            "health": health,
             "length": len(body),
         }
 
-    me = snake("me", my_body)
+    me = snake("me", my_body, health)
     others = [snake(f"enemy{i}", body) for i, body in enumerate(enemies)]
     return {
         "game": {"id": "test-game"},

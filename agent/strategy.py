@@ -1,14 +1,23 @@
 """Decision logic: given a World, choose a move.
 
-Milestone 2: survival only. Drop moves that die this turn (walls, bodies)
-and, when there's a choice, moves that risk losing a head-to-head
-collision. Then pick randomly among what's left. Milestone 3 adds food
-seeking; Milestone 5 turns this into a behavior tree.
+Milestone 3: survival first, then food. Drop moves that die this turn
+(walls, bodies) and, when there's a choice, moves that risk losing a
+head-to-head collision. If we're hungry, take the first step of the
+shortest path to the nearest food. Otherwise pick randomly among the safe
+moves. Milestone 4 adds space control; Milestone 5 turns this into a
+behavior tree.
 """
 
 import random
 
+from agent.pathfind import shortest_path
 from agent.world import MOVES, Point, World, step
+
+# Go for food at this health or below. Health drops by 1 each turn and
+# resets to 100 when we eat. The farthest cell on an 11x11 board is 20 moves
+# away, so 50 leaves room for detours around bodies, and for a rival taking
+# the food first.
+HUNGRY_HEALTH = 50
 
 
 def survivable_moves(world: World) -> list[str]:
@@ -49,10 +58,31 @@ def safe_moves(world: World) -> list[str]:
     return calm or survivable
 
 
+def move_toward_food(world: World, moves: list[str]) -> str | None:
+    """First step of the shortest path to the nearest food, or None.
+
+    The path must start with one of `moves`, so food never outranks safety:
+    cells next to our head that `moves` ruled out count as blocked. Bodies
+    are treated as staying put for the whole path. That's cautious, since
+    tails move away while we travel, but it keeps the search simple.
+    """
+    head = world.me.head
+    blocked = world.blocked_next_turn()
+    blocked |= {step(head, m) for m in MOVES if m not in moves}
+    path = shortest_path(head, world.food, blocked, world.width, world.height)
+    if path is None:
+        return None
+    return next(m for m in moves if step(head, m) == path[0])
+
+
 def decide(world: World) -> str:
     moves = safe_moves(world)
     if not moves:
         # Every move is fatal. Still answer quickly rather than crash --
         # a missing reply also counts as a move, so we gain nothing by failing.
         return "up"
+    if world.me.health <= HUNGRY_HEALTH:
+        move = move_toward_food(world, moves)
+        if move is not None:
+            return move
     return random.choice(moves)

@@ -1,16 +1,18 @@
-"""Hand-crafted board situations for the survival layer.
+"""Hand-crafted board situations for the decision logic.
 
 Coordinates are (x, y) with (0, 0) at the bottom-left; the board is 11x11
 unless a test says otherwise. Bodies are listed head first.
 """
 
-from agent.strategy import decide, safe_moves
+from agent.strategy import HUNGRY_HEALTH, decide, move_toward_food, safe_moves
 from agent.world import MOVES, World
 from boards import make_state
 
 
-def world(my_body, enemies=()):
-    return World.from_json(make_state(my_body, enemies=enemies))
+def world(my_body, enemies=(), food=(), health=100):
+    return World.from_json(
+        make_state(my_body, enemies=enemies, food=food, health=health)
+    )
 
 
 # --- walls and bodies -------------------------------------------------------
@@ -103,3 +105,53 @@ def test_trapped_still_returns_a_move():
     w = world([(0, 0), (0, 1), (1, 1), (1, 0), (1, 0)])
     assert safe_moves(w) == []
     assert decide(w) in MOVES
+
+
+# --- food -------------------------------------------------------------------
+
+
+def test_hungry_snake_heads_for_food():
+    w = world([(5, 5), (5, 4), (5, 3)], food=[(5, 8)], health=HUNGRY_HEALTH)
+    assert decide(w) == "up"
+
+
+def test_hungry_snake_picks_the_nearest_food():
+    # (2, 5) is 3 moves left; (5, 10) is 5 moves up.
+    w = world([(5, 5), (5, 4), (5, 3)], food=[(2, 5), (5, 10)], health=10)
+    assert decide(w) == "left"
+
+
+def test_hungry_snake_routes_around_its_own_body():
+    # Food at (3, 5) is just past our neck at (4, 5). Going around the top
+    # takes 4 moves; going around the bottom takes 6.
+    w = world([(5, 5), (4, 5), (4, 4), (4, 3)], food=[(3, 5)], health=10)
+    assert decide(w) == "up"
+
+
+def test_well_fed_snake_does_not_chase_food():
+    # Food straight up, but above the threshold we still wander randomly.
+    w = world([(5, 5), (5, 4), (5, 3)], food=[(5, 8)], health=HUNGRY_HEALTH + 1)
+    assert len({decide(w) for _ in range(100)}) > 1
+
+
+def test_food_never_outranks_safety():
+    # Food right next to us, but a longer enemy could move onto it too.
+    w = world(
+        [(5, 5), (4, 5), (3, 5)],
+        enemies=[[(7, 5), (8, 5), (9, 5), (10, 5)]],
+        food=[(6, 5)],
+        health=10,
+    )
+    assert decide(w) in {"up", "down"}
+
+
+def test_unreachable_food_falls_back_to_a_safe_move():
+    # Food in the corner is sealed off by an enemy body.
+    w = world(
+        [(5, 5), (5, 4), (5, 3)],
+        enemies=[[(1, 0), (1, 1), (0, 1), (0, 2)]],
+        food=[(0, 0)],
+        health=10,
+    )
+    assert move_toward_food(w, safe_moves(w)) is None
+    assert decide(w) in safe_moves(w)
