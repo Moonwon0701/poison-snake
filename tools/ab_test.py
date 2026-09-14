@@ -90,10 +90,16 @@ def wilson(wins: int, games: int, z: float = 1.96) -> tuple[float, float]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("variants", nargs="*", default=list(VARIANTS), choices=list(VARIANTS))
+    # No `choices` here: with nargs="*", argparse would also check the default
+    # list against them and reject it, so names are validated below instead.
+    parser.add_argument("variants", nargs="*", help=f"any of: {', '.join(VARIANTS)} (default: all)")
     parser.add_argument("--games", type=int, default=2000)
     parser.add_argument("--workers", type=int, default=multiprocessing.cpu_count())
     args = parser.parse_args()
+    unknown = [v for v in args.variants if v not in VARIANTS]
+    if unknown:
+        parser.error(f"unknown variant(s): {', '.join(unknown)}")
+    args.variants = args.variants or list(VARIANTS)
 
     print(f"{args.games} games per variant: 1 challenger vs 3 baseline snakes, {args.workers} workers")
     with multiprocessing.Pool(args.workers) as pool:
