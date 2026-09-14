@@ -1,7 +1,7 @@
 """Grid search on the Battlesnake board.
 
 Pure functions: they take plain points, sets and the board size rather than
-a World, so they're easy to test on their own. Milestone 4 adds flood fill.
+a World, so they're easy to test on their own.
 """
 
 from collections import deque
@@ -44,6 +44,24 @@ def shortest_path(
                 return _walk_back(came_from, start, nxt)
             queue.append(nxt)
     return None
+
+
+def flood_fill(start: Point, blocked: set[Point], width: int, height: int) -> int:
+    """Count the cells reachable from `start` without entering `blocked`.
+
+    `start` itself counts. It's the same breadth-first walk as shortest_path,
+    just without a goal: keep spreading until there's nowhere new to go,
+    then count everything we visited.
+    """
+    seen = {start}
+    queue = deque([start])
+    while queue:
+        current = queue.popleft()
+        for nxt in neighbors(current, width, height):
+            if nxt not in seen and nxt not in blocked:
+                seen.add(nxt)
+                queue.append(nxt)
+    return len(seen)
 
 
 def _walk_back(came_from: dict, start: Point, goal: Point) -> list[Point]:

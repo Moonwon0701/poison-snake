@@ -1,6 +1,6 @@
-"""BFS shortest path on small hand-made grids."""
+"""BFS shortest path and flood fill on small hand-made grids."""
 
-from agent.pathfind import neighbors, shortest_path
+from agent.pathfind import flood_fill, neighbors, shortest_path
 
 
 def assert_walkable(start, path, blocked=frozenset(), width=11, height=11):
@@ -54,3 +54,22 @@ def test_unreachable_goal_returns_none():
 
 def test_no_goals_returns_none():
     assert shortest_path((5, 5), set(), set(), 11, 11) is None
+
+
+def test_flood_fill_counts_the_whole_empty_board():
+    assert flood_fill((0, 0), set(), 3, 3) == 9
+
+
+def test_flood_fill_stops_at_a_wall():
+    # A full wall at x=1 cuts a 3x3 board in two: only x=0 is reachable.
+    assert flood_fill((0, 0), {(1, 0), (1, 1), (1, 2)}, 3, 3) == 3
+
+
+def test_flood_fill_goes_around_a_partial_wall():
+    # The wall has a gap at the top, so everything but the wall is reachable.
+    assert flood_fill((0, 0), {(1, 0), (1, 1)}, 3, 3) == 7
+
+
+def test_flood_fill_counts_the_start_cell():
+    # Boxed in on all sides: just the start cell itself.
+    assert flood_fill((1, 1), {(1, 0), (1, 2), (0, 1), (2, 1)}, 3, 3) == 1
