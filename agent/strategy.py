@@ -1,7 +1,7 @@
 """Decision logic: given a World, choose a move.
 
-Milestone 5: the same decisions as Milestone 4, now laid out as an explicit
-behavior tree (see agent/bt.py). The tree is built once, at import:
+The decision is a behavior tree (see agent/bt.py). With every option off it
+is the Milestone 5 tree:
 
     Selector "choose a move"
     ├── Sequence "no way out"
@@ -16,20 +16,26 @@ behavior tree (see agent/bt.py). The tree is built once, at import:
             │   └── Action "step toward food"
             └── Action "roomiest side"
 
-The two "keep" actions only narrow down the candidate moves on the
-blackboard; the leaves under "pick one" choose among what's left. So food
-can never outrank safety or space.
+Options switch on three head-to-head improvements. Each changes one spot:
 
-The helper functions below hold the actual game logic. The tree's leaves
-just call them and read or write the blackboard.
+- lookahead: a third filter, "keep escapable moves", after "keep roomy moves".
+- length_race: "hungry" becomes "needs food", which is also true while
+  we're not longer than every enemy.
+- hunt: a "hunt" branch between "eat" and "roomiest side" that closes in
+  on a nearby shorter snake.
+
+The "keep" actions only narrow down the candidate moves on the blackboard.
+The leaves under "pick one" choose among what's left, so food and hunting
+can never outrank safety, space or escape routes.
 """
 
+import functools
 import random
 from dataclasses import dataclass, field
 from typing import Any
 
-from agent.bt import Action, Condition, Selector, Sequence
-from agent.pathfind import flood_fill, shortest_path
+from agent.bt import Action, Condition, Node, Selector, Sequence
+from agent.pathfind import flood_fill, neighbors, shortest_path
 from agent.world import MOVES, Point, World, step
 
 # Go for food at this health or below. Health drops by 1 each turn and
@@ -37,6 +43,25 @@ from agent.world import MOVES, Point, World, step
 # away, so 50 leaves room for detours around bodies, and for a rival taking
 # the food first.
 HUNGRY_HEALTH = 50
+
+# Hunt a shorter snake whose head is at most this many moves from ours.
+HUNT_DISTANCE = 2
+
+
+@dataclass(frozen=True)
+class Options:
+    """Which head-to-head improvements the tree uses. All off: Milestone 5."""
+
+    lookahead: bool = False  # prefer moves that leave an escape route next turn
+    length_race: bool = False  # also look for food while not the longest snake
+    hunt: bool = False  # go after nearby shorter snakes
+
+
+DEFAULT_OPTIONS = Options()
+
+
+def distance(a: Point, b: Point) -> int:
+    return abs(a[0] - b[0]) + abs(a[1] - b[1])
 
 
 # --- game logic -------------------------------------------------------------
@@ -106,6 +131,31 @@ def roomy_moves(areas: dict[str, int], length: int) -> list[str]:
     return [m for m, area in areas.items() if area == most]
 
 
+def escape_cells(world: World, move: str) -> list[Point]:
+    """After `move`, the cells we could safely move on to the turn after.
+
+    This looks two turns ahead, roughly:
+
+    - Bodies: by then every snake has dropped two tail cells, and our current
+      head and the cell we move to have become our body.
+    - Enemy heads: an enemy at least as long as us can reach any cell 1 or 2
+      moves from its head in that time. At distance 2 our heads could meet.
+      At distance 1 its head might arrive first and leave its neck there, so
+      we'd hit its body.
+    """
+    head = world.me.head
+    target = step(head, move)
+    blocked = {head, target}
+    for snake in world.snakes:
+        blocked.update(snake.body[:-2])
+    threats = [e.head for e in world.enemies if e.length >= world.me.length]
+    return [
+        cell
+        for cell in neighbors(target, world.width, world.height)
+        if cell not in blocked and not any(1 <= distance(cell, t) <= 2 for t in threats)
+    ]
+
+
 def move_toward_food(world: World, moves: list[str]) -> str | None:
     """First step of the shortest path to the nearest food, or None.
 
@@ -121,6 +171,15 @@ def move_toward_food(world: World, moves: list[str]) -> str | None:
     if path is None:
         return None
     return next(m for m in moves if step(head, m) == path[0])
+
+
+def prey(world: World) -> list[Point]:
+    """Heads of shorter snakes within HUNT_DISTANCE of our head."""
+    return [
+        e.head
+        for e in world.enemies
+        if e.length < world.me.length and distance(e.head, world.me.head) <= HUNT_DISTANCE
+    ]
 
 
 # --- behavior tree ----------------------------------------------------------
@@ -161,13 +220,49 @@ def _keep_roomy_moves(bb: Blackboard) -> bool:
     return True
 
 
+def _keep_escapable_moves(bb: Blackboard) -> bool:
+    # Like the other filters, never narrow down to nothing: if no move keeps
+    # an escape route, a risky one is still better than none.
+    escapable = [m for m in bb.moves if escape_cells(bb.world, m)]
+    if escapable:
+        bb.moves = escapable
+    return True
+
+
 def _hungry(bb: Blackboard) -> bool:
     return bb.world.me.health <= HUNGRY_HEALTH
+
+
+def _needs_food(bb: Blackboard) -> bool:
+    # Head-to-head goes to the longer snake, so keep eating until we're the
+    # longest on the board.
+    world = bb.world
+    longest_enemy = max((e.length for e in world.enemies), default=0)
+    return _hungry(bb) or world.me.length <= longest_enemy
 
 
 def _step_toward_food(bb: Blackboard) -> bool:
     bb.move = move_toward_food(bb.world, bb.moves)
     return bb.move is not None
+
+
+def _shorter_snake_nearby(bb: Blackboard) -> bool:
+    return bool(prey(bb.world))
+
+
+def _close_in(bb: Blackboard) -> bool:
+    # Aim for the cells a prey's head could move into next: if it goes there
+    # too, the collision kills it, not us.
+    world = bb.world
+    goals = [
+        cell
+        for head in prey(world)
+        for cell in neighbors(head, world.width, world.height)
+    ]
+    gaps = {m: min(distance(step(world.me.head, m), g) for g in goals) for m in bb.moves}
+    closest = min(gaps.values())
+    bb.move = bb.rng.choice([m for m in bb.moves if gaps[m] == closest])
+    return True
 
 
 def _roomiest_side(bb: Blackboard) -> bool:
@@ -176,41 +271,54 @@ def _roomiest_side(bb: Blackboard) -> bool:
     return True
 
 
-TREE = Selector(
-    "choose a move",
-    [
-        Sequence(
-            "no way out",
-            [
-                Condition("no safe moves", _no_safe_moves),
-                Action("go up anyway", _go_up_anyway),
-            ],
-        ),
-        Sequence(
-            "normal turn",
-            [
-                Action("keep safe moves", _keep_safe_moves),
-                Action("keep roomy moves", _keep_roomy_moves),
-                Selector(
-                    "pick one",
-                    [
-                        Sequence(
-                            "eat",
-                            [
-                                Condition("hungry", _hungry),
-                                Action("step toward food", _step_toward_food),
-                            ],
-                        ),
-                        Action("roomiest side", _roomiest_side),
-                    ],
-                ),
-            ],
-        ),
-    ],
-)
+@functools.cache
+def build_tree(options: Options) -> Node:
+    """Assemble the tree for `options`. Built once per combination."""
+    filters: list[Node] = [
+        Action("keep safe moves", _keep_safe_moves),
+        Action("keep roomy moves", _keep_roomy_moves),
+    ]
+    if options.lookahead:
+        filters.append(Action("keep escapable moves", _keep_escapable_moves))
+
+    wants_food = (
+        Condition("needs food", _needs_food)
+        if options.length_race
+        else Condition("hungry", _hungry)
+    )
+    pickers: list[Node] = [
+        Sequence("eat", [wants_food, Action("step toward food", _step_toward_food)])
+    ]
+    if options.hunt:
+        pickers.append(
+            Sequence(
+                "hunt",
+                [
+                    Condition("shorter snake nearby", _shorter_snake_nearby),
+                    Action("close in", _close_in),
+                ],
+            )
+        )
+    pickers.append(Action("roomiest side", _roomiest_side))
+
+    return Selector(
+        "choose a move",
+        [
+            Sequence(
+                "no way out",
+                [
+                    Condition("no safe moves", _no_safe_moves),
+                    Action("go up anyway", _go_up_anyway),
+                ],
+            ),
+            Sequence("normal turn", [*filters, Selector("pick one", pickers)]),
+        ],
+    )
 
 
-def decide_with_trace(world: World, rng: Any = random) -> tuple[str, list[str]]:
+def decide_with_trace(
+    world: World, rng: Any = random, options: Options = DEFAULT_OPTIONS
+) -> tuple[str, list[str]]:
     """Run the tree once. Returns the move and the path of nodes that chose it.
 
     Ties are broken with `rng` (the random module unless you pass a seeded
@@ -218,9 +326,9 @@ def decide_with_trace(world: World, rng: Any = random) -> tuple[str, list[str]]:
     """
     blackboard = Blackboard(world, rng=rng)
     trace: list[str] = []
-    TREE.tick(blackboard, trace)
+    build_tree(options).tick(blackboard, trace)
     return blackboard.move, trace
 
 
-def decide(world: World, rng: Any = random) -> str:
-    return decide_with_trace(world, rng)[0]
+def decide(world: World, rng: Any = random, options: Options = DEFAULT_OPTIONS) -> str:
+    return decide_with_trace(world, rng, options)[0]

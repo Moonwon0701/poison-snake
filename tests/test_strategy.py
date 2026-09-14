@@ -8,8 +8,10 @@ import random
 
 from agent.strategy import (
     HUNGRY_HEALTH,
+    Options,
     decide,
     decide_with_trace,
+    escape_cells,
     move_toward_food,
     reachable_area,
     roomy_moves,
@@ -266,3 +268,84 @@ def test_a_seeded_generator_makes_the_choice_repeatable():
     # The Gymnasium environment relies on this to replay seeded games.
     w = world([(5, 5), (5, 4), (5, 3)])
     assert len({decide(w, random.Random(7)) for _ in range(20)}) == 1
+
+
+# --- option: lookahead ------------------------------------------------------
+
+# We're at (5, 5), 5 long, with the body bending right under us. An enemy of
+# equal length has its head at (7, 6). Up, left and right are all calm this
+# turn, but right leads to (6, 5): next turn its exits (7, 5) and (6, 6) sit
+# next to the enemy head, and (6, 4) is still our body.
+CORNER_ME = [(5, 5), (5, 4), (6, 4), (6, 3), (6, 2)]
+CORNER_ENEMY = [(7, 6), (8, 6), (9, 6), (10, 6), (10, 7)]
+
+
+def test_escape_cells_finds_no_way_out_after_the_trap_move():
+    w = world(CORNER_ME, enemies=[CORNER_ENEMY])
+    assert set(safe_moves(w)) == {"up", "left", "right"}
+    assert escape_cells(w, "right") == []
+    assert escape_cells(w, "up") != []
+    assert escape_cells(w, "left") != []
+
+
+def test_lookahead_avoids_the_move_that_gets_cornered():
+    w = world(CORNER_ME, enemies=[CORNER_ENEMY])
+    moves = {decide(w, random.Random(seed), Options(lookahead=True)) for seed in range(50)}
+    assert "right" not in moves
+
+
+def test_lookahead_keeps_every_move_when_none_can_escape():
+    # Boxed into the corner with a single safe move and no exit after it.
+    w = world([(0, 0), (0, 1), (0, 2)], enemies=[[(2, 1), (3, 1), (4, 1), (5, 1)]])
+    assert escape_cells(w, "right") == []
+    assert decide(w, random.Random(0), Options(lookahead=True)) == "right"
+
+
+# --- option: length race ----------------------------------------------------
+
+FAR_LONG_ENEMY = [(0, 10), (1, 10), (2, 10), (3, 10), (4, 10)]
+
+
+def test_length_race_eats_while_an_enemy_is_longer():
+    w = world([(5, 5), (5, 4), (5, 3)], enemies=[FAR_LONG_ENEMY], food=[(5, 8)])
+    move, trace = decide_with_trace(w, random.Random(0), Options(length_race=True))
+    assert move == "up"
+    assert trace[-2:] == ["eat", "step toward food"]
+
+
+def test_without_length_race_a_well_fed_snake_ignores_food():
+    w = world([(5, 5), (5, 4), (5, 3)], enemies=[FAR_LONG_ENEMY], food=[(5, 8)])
+    _, trace = decide_with_trace(w, random.Random(0), Options())
+    assert trace[-1] == "roomiest side"
+
+
+def test_length_race_stops_once_we_are_the_longest():
+    w = world([(5, 5), (5, 4), (5, 3)], enemies=[[(0, 10), (1, 10)]], food=[(5, 8)])
+    _, trace = decide_with_trace(w, random.Random(0), Options(length_race=True))
+    assert trace[-1] == "roomiest side"
+
+
+# --- option: hunt -----------------------------------------------------------
+
+HUNTER = [(5, 5), (5, 4), (5, 3), (5, 2), (5, 1)]  # 5 long
+
+
+def test_hunt_moves_onto_a_cell_the_shorter_snake_could_enter():
+    # Prey (3 long) has its head at (7, 5); (6, 5) is one of its next cells.
+    w = world(HUNTER, enemies=[[(7, 5), (8, 5), (9, 5)]])
+    move, trace = decide_with_trace(w, random.Random(0), Options(hunt=True))
+    assert move == "right"
+    assert trace[-2:] == ["hunt", "close in"]
+
+
+def test_hunt_ignores_snakes_that_are_too_far_or_not_shorter():
+    far = world(HUNTER, enemies=[[(9, 9), (10, 9), (10, 8)]])
+    longer = world(HUNTER, enemies=[[(7, 5), (8, 5), (9, 5), (10, 5), (10, 6), (10, 7)]])
+    for w in (far, longer):
+        _, trace = decide_with_trace(w, random.Random(0), Options(hunt=True))
+        assert trace[-1] == "roomiest side"
+
+
+def test_all_options_off_is_the_default_tree():
+    w = world([(5, 5), (5, 4), (5, 3)], food=[(5, 8)], health=10)
+    assert decide_with_trace(w, random.Random(1)) == decide_with_trace(w, random.Random(1), Options())
