@@ -9,7 +9,7 @@ project for behavior trees, pathfinding, and (later) RL environments.
 server.py            HTTP endpoints (GET /, POST /start /move /end). No strategy.
 agent/world.py       World.from_json(game_state): board, my snake, enemies, food
 agent/strategy.py    decide(world) -> "up" | "down" | "left" | "right"
-agent/pathfind.py    shortest_path (BFS); flood fill comes in Milestone 4
+agent/pathfind.py    shortest_path (BFS) and flood_fill (area counting)
 tests/               pytest tests
 ```
 
@@ -74,9 +74,15 @@ game it also names the winner). The
 server terminal logs `GAME START`, one `TURN n -> move` line per turn, and
 `GAME OVER`.
 
-At this stage (Milestone 3) the snake only ever picks safe moves. It never
-runs into a wall or a body. It knows a tail moves out of the way unless that
-snake just ate. It also avoids cells where an enemy of equal or greater length
-could move its head. When its health drops to 50 or below, it follows the
-shortest path to the nearest food. Otherwise it wanders randomly, so it can
-still trap itself in a dead end; Milestone 4 fixes that.
+At this stage (Milestone 4) the snake decides in priority order:
+
+1. **Safety.** It never runs into a wall or a body. It knows a tail moves
+   out of the way unless that snake just ate. It avoids cells where an enemy
+   of equal or greater length could move its head.
+2. **Space.** For each safe move it flood-fills the area it would be left
+   in, and skips areas with fewer cells than its body is long.
+3. **Food.** At health 50 or below it follows the shortest path to the
+   nearest food, starting only with moves that passed steps 1 and 2.
+4. **Room.** Otherwise it heads for the side with the most space.
+
+Milestone 5 restructures this as an explicit behavior tree.
