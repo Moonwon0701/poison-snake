@@ -40,7 +40,10 @@ All tests should pass.
 python server.py
 ```
 
-The server listens on `http://127.0.0.1:8000`. You can change this with the
+The server runs on [waitress](https://docs.pylonsproject.org/projects/waitress/)
+rather than Flask's development server. Waitress keeps connections open
+between turns, so running many CLI games back-to-back doesn't use up local
+ports. It listens on `http://127.0.0.1:8000`. You can change this with the
 `PORT` and `HOST` environment variables. For a quick check, open
 http://127.0.0.1:8000/ in a browser. You should see JSON containing
 `"apiversion": "1"`.

@@ -8,6 +8,7 @@ import logging
 import os
 
 from flask import Flask, jsonify, request
+from waitress import serve
 
 from agent.strategy import decide
 from agent.world import World
@@ -58,4 +59,9 @@ def end():
 if __name__ == "__main__":
     host = os.environ.get("HOST", "127.0.0.1")
     port = int(os.environ.get("PORT", "8000"))
-    app.run(host=host, port=port)
+    # Waitress instead of Flask's built-in dev server. The dev server closes
+    # the connection after every response, so the game engine opens a new
+    # TCP connection every turn. On Windows each closed connection holds a
+    # local port for ~2 minutes, and long batches of CLI games run out of
+    # ports. Waitress keeps connections open so the engine can reuse them.
+    serve(app, host=host, port=port)
