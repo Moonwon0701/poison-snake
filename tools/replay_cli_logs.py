@@ -10,6 +10,13 @@ the next recorded turn: the same snakes alive, with the same bodies and the
 same health. Snakes that were eliminated leave no next head, so every move
 is tried for them.
 
+That makes eliminations the weak spot. The log records neither the move nor
+the cause, and turning into one's own neck always kills, so almost any death
+can be explained. Survivors, growth, health and food are checked strictly,
+but *why* a snake died is not. A bug that let equal-length snakes survive a
+head-to-head passed this check unnoticed. tests/test_rules.py covers the
+elimination rules case by case.
+
 New food lands on a random cell, and our random numbers aren't the engine's,
 so food is checked loosely. All food the rules kept must still be there, the
 right number of new pieces may appear, and only on cells no snake covers.
