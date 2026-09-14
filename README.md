@@ -9,7 +9,7 @@ project for behavior trees, pathfinding, and (later) RL environments.
 server.py            HTTP endpoints (GET /, POST /start /move /end). No strategy.
 agent/world.py       World.from_json(game_state): board, my snake, enemies, food
 agent/strategy.py    decide(world) -> "up" | "down" | "left" | "right"
-agent/pathfind.py    (Milestone 3) BFS / flood fill
+agent/pathfind.py    shortest_path (BFS); flood fill comes in Milestone 4
 tests/               pytest tests
 ```
 
@@ -71,8 +71,9 @@ game it also names the winner). The
 server terminal logs `GAME START`, one `TURN n -> move` line per turn, and
 `GAME OVER`.
 
-At this stage (Milestone 2) the snake still moves randomly, but only among
-safe moves. It never runs into a wall or a body. It knows a tail moves out of
-the way unless that snake just ate. It also avoids cells where an enemy of
-equal or greater length could move its head. It can still wander into a dead
-end or starve; Milestones 3 and 4 fix that.
+At this stage (Milestone 3) the snake only ever picks safe moves. It never
+runs into a wall or a body. It knows a tail moves out of the way unless that
+snake just ate. It also avoids cells where an enemy of equal or greater length
+could move its head. When its health drops to 50 or below, it follows the
+shortest path to the nearest food. Otherwise it wanders randomly, so it can
+still trap itself in a dead end; Milestone 4 fixes that.
