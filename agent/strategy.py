@@ -26,6 +26,7 @@ just call them and read or write the blackboard.
 
 import random
 from dataclasses import dataclass, field
+from typing import Any
 
 from agent.bt import Action, Condition, Selector, Sequence
 from agent.pathfind import flood_fill, shortest_path
@@ -133,6 +134,7 @@ class Blackboard:
     moves: list[str] = field(default_factory=list)  # candidates still allowed
     areas: dict[str, int] = field(default_factory=dict)  # flood-fill size per move
     move: str | None = None  # the final choice
+    rng: Any = random  # anything with .choice(); a seeded one makes games repeatable
 
 
 def _no_safe_moves(bb: Blackboard) -> bool:
@@ -170,7 +172,7 @@ def _step_toward_food(bb: Blackboard) -> bool:
 
 def _roomiest_side(bb: Blackboard) -> bool:
     most_room = max(bb.areas[m] for m in bb.moves)
-    bb.move = random.choice([m for m in bb.moves if bb.areas[m] == most_room])
+    bb.move = bb.rng.choice([m for m in bb.moves if bb.areas[m] == most_room])
     return True
 
 
@@ -208,13 +210,17 @@ TREE = Selector(
 )
 
 
-def decide_with_trace(world: World) -> tuple[str, list[str]]:
-    """Run the tree once. Returns the move and the path of nodes that chose it."""
-    blackboard = Blackboard(world)
+def decide_with_trace(world: World, rng: Any = random) -> tuple[str, list[str]]:
+    """Run the tree once. Returns the move and the path of nodes that chose it.
+
+    Ties are broken with `rng` (the random module unless you pass a seeded
+    random.Random).
+    """
+    blackboard = Blackboard(world, rng=rng)
     trace: list[str] = []
     TREE.tick(blackboard, trace)
     return blackboard.move, trace
 
 
-def decide(world: World) -> str:
-    return decide_with_trace(world)[0]
+def decide(world: World, rng: Any = random) -> str:
+    return decide_with_trace(world, rng)[0]

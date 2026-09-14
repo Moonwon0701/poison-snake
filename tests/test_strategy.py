@@ -4,6 +4,8 @@ Coordinates are (x, y) with (0, 0) at the bottom-left; the board is 11x11
 unless a test says otherwise. Bodies are listed head first.
 """
 
+import random
+
 from agent.strategy import (
     HUNGRY_HEALTH,
     decide,
@@ -257,3 +259,10 @@ def test_trace_when_well_fed():
     w = world([(5, 5), (5, 4), (5, 3)], food=[(5, 8)])
     move, trace = decide_with_trace(w)
     assert trace == ["choose a move", "normal turn", "pick one", "roomiest side"]
+
+
+def test_a_seeded_generator_makes_the_choice_repeatable():
+    # Three equally roomy moves; the same seed must pick the same one.
+    # The Gymnasium environment relies on this to replay seeded games.
+    w = world([(5, 5), (5, 4), (5, 3)])
+    assert len({decide(w, random.Random(7)) for _ in range(20)}) == 1
