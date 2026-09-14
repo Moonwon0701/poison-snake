@@ -1,20 +1,33 @@
 """Decision logic: given a World, choose a move.
 
-Milestone 4: survival, then space, then food. Each step narrows down the
-moves the next one may pick from:
+Milestone 5: the same decisions as Milestone 4, now laid out as an explicit
+behavior tree (see agent/bt.py). The tree is built once, at import:
 
-1. Safety: drop moves that die this turn (walls, bodies) and, when there's
-   a choice, moves that risk losing a head-to-head collision.
-2. Space: drop moves into an area too small to hold our body.
-3. Food: if we're hungry, take the first step of the shortest path to the
-   nearest food.
-4. Otherwise head for the side with the most room.
+    Selector "choose a move"
+    ├── Sequence "no way out"
+    │   ├── Condition "no safe moves"
+    │   └── Action "go up anyway"
+    └── Sequence "normal turn"
+        ├── Action "keep safe moves"      (walls, bodies, head-to-head risk)
+        ├── Action "keep roomy moves"     (flood fill: area >= our length)
+        └── Selector "pick one"
+            ├── Sequence "eat"
+            │   ├── Condition "hungry"    (health <= HUNGRY_HEALTH)
+            │   └── Action "step toward food"
+            └── Action "roomiest side"
 
-Milestone 5 turns this into a behavior tree.
+The two "keep" actions only narrow down the candidate moves on the
+blackboard; the leaves under "pick one" choose among what's left. So food
+can never outrank safety or space.
+
+The helper functions below hold the actual game logic. The tree's leaves
+just call them and read or write the blackboard.
 """
 
 import random
+from dataclasses import dataclass, field
 
+from agent.bt import Action, Condition, Selector, Sequence
 from agent.pathfind import flood_fill, shortest_path
 from agent.world import MOVES, Point, World, step
 
@@ -23,6 +36,9 @@ from agent.world import MOVES, Point, World, step
 # away, so 50 leaves room for detours around bodies, and for a rival taking
 # the food first.
 HUNGRY_HEALTH = 50
+
+
+# --- game logic -------------------------------------------------------------
 
 
 def survivable_moves(world: World) -> list[str]:
@@ -106,20 +122,99 @@ def move_toward_food(world: World, moves: list[str]) -> str | None:
     return next(m for m in moves if step(head, m) == path[0])
 
 
+# --- behavior tree ----------------------------------------------------------
+
+
+@dataclass
+class Blackboard:
+    """What the tree's nodes share during one turn."""
+
+    world: World
+    moves: list[str] = field(default_factory=list)  # candidates still allowed
+    areas: dict[str, int] = field(default_factory=dict)  # flood-fill size per move
+    move: str | None = None  # the final choice
+
+
+def _no_safe_moves(bb: Blackboard) -> bool:
+    # A Condition must not write to the blackboard, so "keep safe moves"
+    # computes this again. It's a handful of cell checks, so that's cheap.
+    return not safe_moves(bb.world)
+
+
+def _go_up_anyway(bb: Blackboard) -> bool:
+    # Every move is fatal. Still answer quickly rather than crash --
+    # a missing reply also counts as a move, so we gain nothing by failing.
+    bb.move = "up"
+    return True
+
+
+def _keep_safe_moves(bb: Blackboard) -> bool:
+    bb.moves = safe_moves(bb.world)
+    return bool(bb.moves)
+
+
+def _keep_roomy_moves(bb: Blackboard) -> bool:
+    bb.areas = {m: reachable_area(bb.world, m) for m in bb.moves}
+    bb.moves = roomy_moves(bb.areas, bb.world.me.length)
+    return True
+
+
+def _hungry(bb: Blackboard) -> bool:
+    return bb.world.me.health <= HUNGRY_HEALTH
+
+
+def _step_toward_food(bb: Blackboard) -> bool:
+    bb.move = move_toward_food(bb.world, bb.moves)
+    return bb.move is not None
+
+
+def _roomiest_side(bb: Blackboard) -> bool:
+    most_room = max(bb.areas[m] for m in bb.moves)
+    bb.move = random.choice([m for m in bb.moves if bb.areas[m] == most_room])
+    return True
+
+
+TREE = Selector(
+    "choose a move",
+    [
+        Sequence(
+            "no way out",
+            [
+                Condition("no safe moves", _no_safe_moves),
+                Action("go up anyway", _go_up_anyway),
+            ],
+        ),
+        Sequence(
+            "normal turn",
+            [
+                Action("keep safe moves", _keep_safe_moves),
+                Action("keep roomy moves", _keep_roomy_moves),
+                Selector(
+                    "pick one",
+                    [
+                        Sequence(
+                            "eat",
+                            [
+                                Condition("hungry", _hungry),
+                                Action("step toward food", _step_toward_food),
+                            ],
+                        ),
+                        Action("roomiest side", _roomiest_side),
+                    ],
+                ),
+            ],
+        ),
+    ],
+)
+
+
+def decide_with_trace(world: World) -> tuple[str, list[str]]:
+    """Run the tree once. Returns the move and the path of nodes that chose it."""
+    blackboard = Blackboard(world)
+    trace: list[str] = []
+    TREE.tick(blackboard, trace)
+    return blackboard.move, trace
+
+
 def decide(world: World) -> str:
-    moves = safe_moves(world)
-    if not moves:
-        # Every move is fatal. Still answer quickly rather than crash --
-        # a missing reply also counts as a move, so we gain nothing by failing.
-        return "up"
-
-    areas = {m: reachable_area(world, m) for m in moves}
-    moves = roomy_moves(areas, world.me.length)
-
-    if world.me.health <= HUNGRY_HEALTH:
-        move = move_toward_food(world, moves)
-        if move is not None:
-            return move
-
-    most_room = max(areas[m] for m in moves)
-    return random.choice([m for m in moves if areas[m] == most_room])
+    return decide_with_trace(world)[0]

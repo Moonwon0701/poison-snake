@@ -7,6 +7,7 @@ unless a test says otherwise. Bodies are listed head first.
 from agent.strategy import (
     HUNGRY_HEALTH,
     decide,
+    decide_with_trace,
     move_toward_food,
     reachable_area,
     roomy_moves,
@@ -224,3 +225,35 @@ def test_roomy_moves_drops_moves_that_do_not_fit():
 def test_roomy_moves_falls_back_to_the_biggest_trap():
     # Nothing fits; the bigger trap buys more turns.
     assert roomy_moves({"up": 3, "down": 5, "left": 5}, length=8) == ["down", "left"]
+
+
+# --- which branch of the behavior tree decided --------------------------------
+
+
+def test_trace_when_there_is_no_way_out():
+    w = world([(0, 0), (0, 1), (1, 1), (1, 0), (1, 0)])
+    assert decide_with_trace(w) == ("up", ["choose a move", "no way out", "go up anyway"])
+
+
+def test_trace_when_hungry_and_food_is_reachable():
+    w = world([(5, 5), (5, 4), (5, 3)], food=[(5, 8)], health=10)
+    move, trace = decide_with_trace(w)
+    assert move == "up"
+    assert trace == ["choose a move", "normal turn", "pick one", "eat", "step toward food"]
+
+
+def test_trace_when_hungry_but_food_is_unreachable():
+    w = world(
+        [(5, 5), (5, 4), (5, 3)],
+        enemies=[[(1, 0), (1, 1), (0, 1), (0, 2)]],
+        food=[(0, 0)],
+        health=10,
+    )
+    move, trace = decide_with_trace(w)
+    assert trace == ["choose a move", "normal turn", "pick one", "roomiest side"]
+
+
+def test_trace_when_well_fed():
+    w = world([(5, 5), (5, 4), (5, 3)], food=[(5, 8)])
+    move, trace = decide_with_trace(w)
+    assert trace == ["choose a move", "normal turn", "pick one", "roomiest side"]

@@ -10,7 +10,7 @@ import os
 from flask import Flask, jsonify, request
 from waitress import serve
 
-from agent.strategy import decide
+from agent.strategy import decide_with_trace
 from agent.world import World
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
@@ -44,8 +44,9 @@ def start():
 @app.post("/move")
 def move():
     game_state = request.get_json()
-    chosen = decide(World.from_json(game_state))
-    log.info("TURN %s -> %s", game_state["turn"], chosen)
+    chosen, trace = decide_with_trace(World.from_json(game_state))
+    # trace[0] is always the root node, so leave it out of the log.
+    log.info("TURN %s -> %s [%s]", game_state["turn"], chosen, " > ".join(trace[1:]))
     return jsonify({"move": chosen})
 
 
