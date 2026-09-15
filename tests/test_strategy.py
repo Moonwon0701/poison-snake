@@ -263,13 +263,13 @@ def test_trace_when_hungry_but_food_is_unreachable():
         health=10,
     )
     move, trace = decide_with_trace(w)
-    assert trace == ["choose a move", "normal turn", "pick one", "roomiest side"]
+    assert trace == ["choose a move", "normal turn", "pick one", "most territory"]
 
 
 def test_trace_when_well_fed():
     w = world([(5, 5), (5, 4), (5, 3)], food=[(5, 8)])
     move, trace = decide_with_trace(w)
-    assert trace == ["choose a move", "normal turn", "pick one", "roomiest side"]
+    assert trace == ["choose a move", "normal turn", "pick one", "most territory"]
 
 
 def test_a_seeded_generator_makes_the_choice_repeatable():
@@ -417,7 +417,7 @@ def test_explain_visits_line_up_with_the_tree():
     ids = {node.name: str(i) for i, node in enumerate(build_tree(DEFAULT_OPTIONS).walk())}
     assert e["visits"][ids["step toward food"]] == "success"
     assert e["visits"][ids["no safe moves"]] == "failure"
-    assert ids["roomiest side"] not in e["visits"]
+    assert ids["most territory"] not in e["visits"]
 
 
 def test_explain_picks_the_same_move_as_decide():
@@ -433,7 +433,14 @@ def test_explain_picks_the_same_move_as_decide():
 
 
 def test_decide_uses_the_default_options():
-    assert DEFAULT_OPTIONS == Options(lookahead=True, length_race=True, hunt=True)
+    assert DEFAULT_OPTIONS == Options(
+        lookahead=True,
+        length_race=True,
+        hunt=True,
+        timed_area=True,
+        voronoi_gate=True,
+        voronoi_pick=True,
+    )
     w = world(HUNTER, enemies=[[(7, 5), (8, 5), (9, 5)]])
     default = decide_with_trace(w, random.Random(1))
     assert default == decide_with_trace(w, random.Random(1), DEFAULT_OPTIONS)
@@ -576,4 +583,4 @@ def test_trap_options_add_their_nodes_to_the_tree():
     assert "measure territory" in names(everything)
     assert "most territory" in names(everything)
     assert "roomiest side" not in names(everything)
-    assert "measure territory" not in names(DEFAULT_OPTIONS)
+    assert "measure territory" not in names(Options(lookahead=True, length_race=True, hunt=True))

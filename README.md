@@ -112,12 +112,36 @@ four-snake games:
 
 `tools/ab_test.py` pits one snake with some options against three snakes
 with none, for 2,000 simulated games per combination. With all three on, the
-snake won 57.6% of games, against 22.4% with none. That combination is the
-default (`DEFAULT_OPTIONS` in `agent/strategy.py`).
+snake won 57.6% of games, against 22.4% with none.
+
+### Trap improvements
+
+With head-to-heads handled, most deaths were traps. A region split at a
+narrow gap, usually closed by an enemy, and left the snake on the small side.
+Four more options target that:
+
+| Option | What it does |
+|---|---|
+| `voronoi_pick` | Goes where our territory (cells we reach before any enemy) is biggest |
+| `voronoi_gate` | Chases food or prey only through moves whose territory fits our body |
+| `timed_area` | Counts cells that bodies will have left by the time we arrive |
+| `worst_case_filter` | Keeps moves our body fits whatever nearby enemy heads do |
+
+The test opponents were three snakes with the head-to-head options. Every
+combination was screened over 1,000 games, and the best were confirmed on
+4,000 fresh seeds:
+
+- `voronoi_pick` + `voronoi_gate` + `timed_area` won 58.1% (95% CI 56.6-59.6%)
+  and was trapped in 26.7% of games, against 24.4% and 50.3% without them.
+- Adding the worst-case filter did worse, so it stays off.
+
+The default (`DEFAULT_OPTIONS` in `agent/strategy.py`) is the three
+head-to-head options plus those three.
 
 ```powershell
-python tools\ab_test.py                  # every combination, ~3 minutes on 24 cores
-python tools\ab_test.py lookahead hunt   # just these
+python tools\ab_test.py "territory:*" --games 1000              # screen every trap combination
+python tools\ab_test.py lookahead hunt --baseline none          # against snakes with no options
+python tools\ab_test.py default --games 4000 --first-seed 1000  # confirm on fresh seeds
 ```
 
 ### Decision replay viewer

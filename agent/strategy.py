@@ -80,10 +80,23 @@ class Options:
     voronoi_pick: bool = False  # otherwise go where our territory is biggest
 
 
-# Picked with tools/ab_test.py: 2,000 games each, one challenger against three
-# snakes with every option off. All three together won 57.6% of games
-# (95% CI 55.4-59.7%); every option off won 22.4%.
-DEFAULT_OPTIONS = Options(lookahead=True, length_race=True, hunt=True)
+# Picked with tools/ab_test.py in two rounds, one challenger against three
+# other snakes.
+# - Head-to-head, against snakes with every option off (2,000 games each):
+#   lookahead + length_race + hunt won 57.6%; every option off won 22.4%.
+# - Traps, against snakes with those three (every combination screened on
+#   1,000 games, the best confirmed on 4,000 fresh seeds): adding
+#   voronoi_pick + voronoi_gate + timed_area won 58.1% (95% CI 56.6-59.6%)
+#   and was trapped in 26.7% of games, against 24.4% and 50.3% without.
+#   worst_case_filter on top did worse (55.4%), so it stays off.
+DEFAULT_OPTIONS = Options(
+    lookahead=True,
+    length_race=True,
+    hunt=True,
+    timed_area=True,
+    voronoi_gate=True,
+    voronoi_pick=True,
+)
 
 
 def distance(a: Point, b: Point) -> int:
