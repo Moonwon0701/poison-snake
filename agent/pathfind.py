@@ -64,6 +64,56 @@ def flood_fill(start: Point, blocked: set[Point], width: int, height: int) -> in
     return len(seen)
 
 
+def distance_map(
+    starts: list[Point], blocked: set[Point], width: int, height: int
+) -> dict[Point, int]:
+    """How many moves it takes to reach each cell from the nearest start.
+
+    Every start counts as 1 move away (it's where a head moves next), its
+    neighbors as 2, and so on. Starts that are blocked or off the board are
+    skipped. With several starts this is one BFS spreading from all of them
+    at once, so each cell gets its distance to whichever start is closest.
+    """
+    dist: dict[Point, int] = {}
+    queue = deque()
+    for start in starts:
+        x, y = start
+        if 0 <= x < width and 0 <= y < height and start not in blocked and start not in dist:
+            dist[start] = 1
+            queue.append(start)
+    while queue:
+        current = queue.popleft()
+        for nxt in neighbors(current, width, height):
+            if nxt not in dist and nxt not in blocked:
+                dist[nxt] = dist[current] + 1
+                queue.append(nxt)
+    return dist
+
+
+def timed_flood_fill(
+    start: Point, free_at: dict[Point, int], width: int, height: int
+) -> int:
+    """Count the cells reachable from `start` when some cells open up later.
+
+    `free_at[cell]` is the move on which that cell becomes free; cells not in
+    it are free already. We step onto `start` on move 1 and onto a cell d
+    moves away on move d, which is allowed once free_at.get(cell, 0) <= d.
+    For snakes that's a body segment moving out of the way before we arrive.
+    """
+    if free_at.get(start, 0) > 1:
+        return 0
+    arrival = {start: 1}
+    queue = deque([start])
+    while queue:
+        current = queue.popleft()
+        for nxt in neighbors(current, width, height):
+            move = arrival[current] + 1
+            if nxt not in arrival and free_at.get(nxt, 0) <= move:
+                arrival[nxt] = move
+                queue.append(nxt)
+    return len(arrival)
+
+
 def _walk_back(came_from: dict, start: Point, goal: Point) -> list[Point]:
     """Follow came_from links from the goal back to start, then reverse."""
     path = [goal]

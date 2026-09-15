@@ -1,6 +1,6 @@
 """BFS shortest path and flood fill on small hand-made grids."""
 
-from agent.pathfind import flood_fill, neighbors, shortest_path
+from agent.pathfind import distance_map, flood_fill, neighbors, shortest_path, timed_flood_fill
 
 
 def assert_walkable(start, path, blocked=frozenset(), width=11, height=11):
@@ -73,3 +73,32 @@ def test_flood_fill_goes_around_a_partial_wall():
 def test_flood_fill_counts_the_start_cell():
     # Boxed in on all sides: just the start cell itself.
     assert flood_fill((1, 1), {(1, 0), (1, 2), (0, 1), (2, 1)}, 3, 3) == 1
+
+
+def test_distance_map_from_one_start():
+    dist = distance_map([(0, 0)], set(), 3, 1)
+    assert dist == {(0, 0): 1, (1, 0): 2, (2, 0): 3}
+
+
+def test_distance_map_keeps_the_nearest_start():
+    # Two starts at both ends of a 5-cell corridor meet in the middle.
+    dist = distance_map([(0, 0), (4, 0)], set(), 5, 1)
+    assert [dist[(x, 0)] for x in range(5)] == [1, 2, 3, 2, 1]
+
+
+def test_distance_map_goes_around_blocked_cells_and_skips_bad_starts():
+    dist = distance_map([(0, 0), (1, 0), (-1, 0)], {(1, 0)}, 2, 2)
+    assert dist == {(0, 0): 1, (0, 1): 2, (1, 1): 3}
+
+
+def test_timed_flood_fill_waits_for_cells_to_open():
+    # A 1x4 corridor. (2, 0) opens on move 3, which is exactly when we'd
+    # arrive there, so the whole corridor counts.
+    assert timed_flood_fill((0, 0), {(2, 0): 3}, 4, 1) == 4
+    # If it opens a move later, we get there too early and stop at 2 cells.
+    assert timed_flood_fill((0, 0), {(2, 0): 4}, 4, 1) == 2
+
+
+def test_timed_flood_fill_needs_the_start_free_on_the_first_move():
+    assert timed_flood_fill((0, 0), {(0, 0): 2}, 3, 1) == 0
+    assert timed_flood_fill((0, 0), {(0, 0): 1}, 3, 1) == 3
