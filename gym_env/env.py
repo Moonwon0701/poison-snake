@@ -16,7 +16,7 @@ import gymnasium as gym
 import numpy as np
 from gymnasium import spaces
 
-from agent.strategy import decide
+from agent.strategy import DEFAULT_OPTIONS, Options, decide
 from agent.world import MOVES, World
 from gym_env import rules
 
@@ -40,8 +40,17 @@ Policy = Callable[[dict, random.Random], str]
 
 
 def behavior_tree_policy(game_state: dict, rng: random.Random) -> str:
-    """Our Milestone 5 snake."""
+    """Our behavior-tree snake with its default options."""
     return decide(World.from_json(game_state), rng)
+
+
+def bt_policy(options: Options = DEFAULT_OPTIONS) -> Policy:
+    """Our behavior-tree snake with the given options, e.g. Options() for a weak one."""
+
+    def policy(game_state: dict, rng: random.Random) -> str:
+        return decide(World.from_json(game_state), rng, options)
+
+    return policy
 
 
 def encode_observation(state: rules.GameState, agent_id: str = AGENT) -> np.ndarray:
