@@ -109,6 +109,43 @@ def test_trace_follows_the_deciding_branch_through_nested_nodes():
     assert tick(tree) == (Status.SUCCESS, ["root", "second", "y"])
 
 
+def test_visits_record_every_node_that_ran_with_its_status():
+    root = Selector(
+        "root",
+        [Condition("a", lambda bb: False), Action("b", lambda bb: True), Action("c", lambda bb: True)],
+    )
+    visits = []
+    root.tick(None, [], visits)
+    # Children come before their parent; "c" never ran.
+    assert [(node.name, status) for node, status in visits] == [
+        ("a", Status.FAILURE),
+        ("b", Status.SUCCESS),
+        ("root", Status.SUCCESS),
+    ]
+
+
+def test_describe_gives_the_shape_with_ids_in_walk_order():
+    tree = Selector(
+        "root",
+        [Sequence("seq", [Condition("c", lambda bb: True)]), Action("act", lambda bb: True)],
+    )
+    assert [node.name for node in tree.walk()] == ["root", "seq", "c", "act"]
+    assert tree.describe() == {
+        "id": 0,
+        "name": "root",
+        "kind": "Selector",
+        "children": [
+            {
+                "id": 1,
+                "name": "seq",
+                "kind": "Sequence",
+                "children": [{"id": 2, "name": "c", "kind": "Condition", "children": []}],
+            },
+            {"id": 3, "name": "act", "kind": "Action", "children": []},
+        ],
+    }
+
+
 def test_one_tree_can_be_ticked_again_with_fresh_results():
     # Nodes keep no state between ticks.
     tree = Selector("root", [Condition("flag", lambda bb: bb["flag"]), Action("fallback", lambda bb: True)])
