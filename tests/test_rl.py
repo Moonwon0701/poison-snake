@@ -11,6 +11,7 @@ import pytest
 
 pytest.importorskip("sb3_contrib")
 
+import numpy as np  # noqa: E402
 import torch  # noqa: E402
 from gymnasium import spaces  # noqa: E402
 
@@ -22,7 +23,7 @@ from rl.agent import RLPolicy  # noqa: E402
 from rl.envs import make_env  # noqa: E402
 from rl.evaluate import evaluate, report  # noqa: E402
 from rl.model import SnakeCNN  # noqa: E402
-from rl.train import train  # noqa: E402
+from rl.train import build_vec_env, train  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
 import explain_game  # noqa: E402
@@ -54,6 +55,23 @@ def test_mask_is_never_empty():
     env.reset(seed=0, options={"state": state})
     assert not action_mask(env.unwrapped.state).any()
     assert env.action_masks().all()
+
+
+def test_cached_masks_match_asking_each_environment():
+    # Short games (duel, random moves) so several episodes end and reset.
+    vec_env = build_vec_env("duel_weak", n_envs=3, seed=0, subprocess=False)
+    vec_env.reset()
+    rng = np.random.default_rng(0)
+    episodes = 0
+    for _ in range(300):
+        cached = np.stack(vec_env.env_method("action_masks"))
+        asked = np.stack(vec_env.venv.env_method("action_masks"))
+        assert (cached == asked).all()
+        actions = [rng.choice(np.flatnonzero(mask)) for mask in cached]
+        _, _, dones, _ = vec_env.step(np.array(actions))
+        episodes += int(dones.sum())
+    assert episodes >= 3
+    vec_env.close()
 
 
 def test_bt_policy_plays_with_the_given_options():

@@ -22,7 +22,9 @@ from sb3_contrib.common.maskable.callbacks import MaskableEvalCallback
 from stable_baselines3.common.callbacks import CheckpointCallback
 from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecEnv
 
-from rl.envs import STAGES, make_env
+import torch
+
+from rl.envs import STAGES, MaskCachingVecEnv, make_env
 from rl.model import new_model
 
 RUNS = Path("runs")
@@ -41,7 +43,7 @@ def build_vec_env(stage: str, n_envs: int, seed: int, subprocess: bool = True) -
     else:
         vec_env = DummyVecEnv(env_fns)
     vec_env.seed(seed)
-    return vec_env
+    return MaskCachingVecEnv(vec_env)
 
 
 def train(
@@ -56,8 +58,15 @@ def train(
     eval_games: int = 50,
     subprocess: bool = True,
     runs_dir: Path = RUNS,
+    threads: int | None = None,
 ) -> Path:
-    """Train for `timesteps` moves on `stage`. Returns the saved model's path."""
+    """Train for `timesteps` moves on `stage`. Returns the saved model's path.
+
+    `threads` caps PyTorch's CPU threads. By default it takes every core,
+    which competes with the environment processes for the same cores.
+    """
+    if threads:
+        torch.set_num_threads(threads)
     run_dir = Path(runs_dir) / (run_name or stage)
     run_dir.mkdir(parents=True, exist_ok=True)
     env = build_vec_env(stage, n_envs, seed, subprocess)
@@ -103,6 +112,7 @@ def train(
         "started_from": str(start_from) if start_from else None,
         "n_envs": n_envs,
         "device": str(model.device),
+        "torch_threads": torch.get_num_threads(),
         "seed": seed,
         "seconds": round(elapsed, 1),
         "steps_per_second": round(timesteps / elapsed),
@@ -125,6 +135,7 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--eval-every", type=int, default=200_000)
     parser.add_argument("--eval-games", type=int, default=50)
+    parser.add_argument("--threads", type=int, help="PyTorch CPU threads (default: all cores)")
     args = parser.parse_args()
     train(
         args.stage,
@@ -136,6 +147,7 @@ def main() -> None:
         seed=args.seed,
         eval_every=args.eval_every,
         eval_games=args.eval_games,
+        threads=args.threads,
     )
 
 
