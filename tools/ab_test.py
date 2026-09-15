@@ -10,7 +10,10 @@ current DEFAULT_OPTIONS unless --baseline names another variant. Four
 equally strong snakes each win 25% of games, so a variant helps if its win
 rate is clearly above 25%. We print a 95% Wilson confidence interval and mark
 variants whose whole interval clears 25%. Seeds are the same for every
-variant, so they all start from the same layouts.
+variant, so they all start from the same layouts. After screening many
+variants, confirm the best ones with --first-seed set past the screening
+seeds: a variant picked for doing well on some seeds tends to look a bit
+better on those seeds than it really is.
 
 Also printed, for context: draws, how the challenger died, how often it was
 trapped, and its average survival alone on the board.
@@ -122,6 +125,10 @@ def main() -> None:
     parser.add_argument("variants", nargs="*", help="variant names or glob patterns (default: all)")
     parser.add_argument("--baseline", default="default", help="variant the three opponents use")
     parser.add_argument("--games", type=int, default=2000)
+    parser.add_argument(
+        "--first-seed", type=int, default=0,
+        help="seeds run from here; confirm a screening winner on seeds it wasn't picked on",
+    )
     parser.add_argument("--workers", type=int, default=multiprocessing.cpu_count())
     args = parser.parse_args()
     try:
@@ -131,14 +138,19 @@ def main() -> None:
     if args.baseline not in VARIANTS:
         parser.error(f"unknown baseline {args.baseline!r}; choose from: {', '.join(VARIANTS)}")
 
-    print(f"{args.games} games per variant: 1 challenger vs 3 '{args.baseline}' snakes, {args.workers} workers")
+    seeds = range(args.first_seed, args.first_seed + args.games)
+    print(
+        f"{args.games} games per variant (seeds {seeds.start}-{seeds.stop - 1}): "
+        f"1 challenger vs 3 '{args.baseline}' snakes, {args.workers} workers"
+    )
     summary = []
     with multiprocessing.Pool(args.workers) as pool:
         for variant in variants:
             start = time.perf_counter()
-            jobs = [(variant, seed, args.baseline) for seed in range(args.games)]
+            jobs = [(variant, seed, args.baseline) for seed in seeds]
             results = pool.map(_play_duel, jobs, chunksize=8)
-            solo = pool.map(_play_solo, [(variant, seed, args.baseline) for seed in range(SOLO_GAMES)], chunksize=4)
+            solo_seeds = range(args.first_seed, args.first_seed + SOLO_GAMES)
+            solo = pool.map(_play_solo, [(variant, seed, args.baseline) for seed in solo_seeds], chunksize=4)
 
             wins = sum(r["won"] for r in results)
             low, high = wilson(wins, args.games)
