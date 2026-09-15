@@ -120,6 +120,32 @@ python tools\ab_test.py                  # every combination, ~3 minutes on 24 c
 python tools\ab_test.py lookahead hunt   # just these
 ```
 
+### Decision replay viewer
+
+`tools/explain_game.py` turns a game into one HTML file that shows why each
+snake moved the way it did. Open the file in any browser; it needs no server.
+
+```powershell
+# A game recorded by the CLI (battlesnake play ... -o game.jsonl)
+python tools\explain_game.py game.jsonl -o replay.html
+
+# A new game played in the simulator, 1 snake against 3
+python tools\explain_game.py --simulate --opponents 3 --seed 7 -o replay.html
+```
+
+For each turn, click a snake to see:
+
+- Its four moves as arrows, colored by the filter that dropped them
+  (safety, space, escape) or by whether they were chosen, each with a reason.
+- Overlays you can switch on and off: danger cells, open area per move, the
+  food path, escape cells, and hunt targets.
+- The behavior tree, with the nodes that ran and the branch that decided.
+
+Decisions for a CLI log are re-computed with the current code. A random
+tie-break can then pick a different move from the recorded one, and the
+viewer shows both. Simulated games record exactly the decisions made.
+Keyboard shortcuts match the official board viewer: Space, ←/→, q/e, r/t.
+
 ## Gymnasium environment (Milestone 6)
 
 `gym_env/` re-implements the standard Battlesnake rules in plain Python and

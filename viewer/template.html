@@ -1,0 +1,503 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>poison-snake replay</title>
+<style>
+  :root {
+    --bg: #f6f5f1; --panel: #ffffff; --ink: #1f2328; --muted: #6b7280; --line: #e2e0da;
+    --cell: #eceae4; --grid: #dad7cf;
+    --chosen: #15803d; --candidate: #2563eb; --safety: #dc2626; --space: #ea580c; --escape: #b7791f;
+    --food: #e11d48; --hunt: #9333ea; --danger: rgba(220, 38, 38, 0.16);
+    --ok: #15803d; --fail: #b91c1c; --skip: #9ca3af;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #15171c; --panel: #1e2128; --ink: #e5e7eb; --muted: #9ca3af; --line: #2c3039;
+      --cell: #242830; --grid: #2f343e;
+      --chosen: #4ade80; --candidate: #60a5fa; --safety: #f87171; --space: #fb923c; --escape: #facc15;
+      --food: #fb7185; --hunt: #c084fc; --danger: rgba(248, 113, 113, 0.2);
+      --ok: #4ade80; --fail: #f87171; --skip: #6b7280;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; background: var(--bg); color: var(--ink); }
+  header { display: flex; flex-wrap: wrap; gap: 4px 16px; align-items: baseline; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+  h1 { font-size: 16px; margin: 0; }
+  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 18px 0 8px; }
+  .muted { color: var(--muted); }
+  main { display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, 420px); gap: 16px; padding: 16px; max-width: 1280px; margin: 0 auto; }
+  /* minmax(0, 1fr), not 1fr: a plain 1fr column can't shrink below its
+     widest unbreakable content, which pushed the page wider than a phone. */
+  @media (max-width: 900px) { main { grid-template-columns: minmax(0, 1fr); padding: 12px; } }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; min-width: 0; }
+  .trace, td, #snakes li { overflow-wrap: anywhere; }
+  #snakes .stat { text-align: right; }
+  #board { width: 100%; max-width: 640px; display: block; margin: 0 auto; touch-action: manipulation; }
+  .controls { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 10px; }
+  .controls button { font: inherit; min-width: 36px; padding: 4px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--ink); cursor: pointer; }
+  .controls button:hover { border-color: var(--muted); }
+  .controls input[type=range] { flex: 1 1 160px; }
+  .controls select { font: inherit; background: var(--bg); color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 3px; }
+  #turn-label { font-variant-numeric: tabular-nums; min-width: 110px; }
+  .toggles, .legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 10px; font-size: 13px; }
+  .toggles label { cursor: pointer; }
+  .swatch { display: inline-block; width: 18px; height: 4px; border-radius: 2px; vertical-align: middle; margin-right: 5px; }
+  .swatch.box { height: 12px; width: 12px; }
+  .keys { font-size: 12px; margin-top: 8px; }
+  #snakes { list-style: none; padding: 0; margin: 0; display: grid; gap: 4px; }
+  #snakes li { display: flex; gap: 8px; align-items: center; padding: 5px 8px; border-radius: 6px; cursor: pointer; border: 1px solid transparent; }
+  #snakes li:hover { border-color: var(--line); }
+  #snakes li.active { border-color: var(--ink); }
+  #snakes .dot { width: 12px; height: 12px; border-radius: 3px; flex: none; }
+  #snakes .stat { margin-left: auto; font-size: 12px; font-variant-numeric: tabular-nums; }
+  .headline { font-size: 15px; font-weight: 600; margin: 0 0 4px; }
+  .note { font-size: 12px; background: var(--bg); border-left: 3px solid var(--escape); padding: 4px 8px; margin: 6px 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  td { padding: 5px 4px; border-top: 1px solid var(--line); vertical-align: top; }
+  td.dir { white-space: nowrap; font-weight: 600; width: 64px; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); width: 36px; }
+  tr[data-move]:hover { background: var(--bg); }
+  .recorded { font-size: 11px; font-weight: 600; color: var(--ink); margin-top: 2px; }
+  .badge { display: inline-block; font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 10px; color: #fff; white-space: nowrap; }
+  .trace { font-family: ui-monospace, Consolas, monospace; font-size: 12px; margin: 8px 0 0; }
+  .tree, .tree ul { list-style: none; margin: 0; padding-left: 18px; }
+  .tree { padding-left: 0; font-family: ui-monospace, Consolas, monospace; font-size: 12.5px; }
+  .tree li { position: relative; padding: 1px 0; }
+  .tree ul li::before { content: ""; position: absolute; left: -11px; top: 0; bottom: 0; border-left: 1px solid var(--line); }
+  .tree ul li::after { content: ""; position: absolute; left: -11px; top: 11px; width: 8px; border-top: 1px solid var(--line); }
+  .tree .icon { display: inline-block; width: 16px; text-align: center; color: var(--muted); }
+  .tree .success > .label { color: var(--ok); }
+  .tree .failure > .label { color: var(--fail); }
+  .tree .skipped > .label { color: var(--skip); }
+  .tree .decisive > .label .name { font-weight: 700; text-decoration: underline; text-underline-offset: 3px; }
+  .tree .status { font-size: 11px; margin-left: 6px; }
+  .empty { padding: 40px 16px; text-align: center; }
+  svg text { font-family: system-ui, sans-serif; }
+</style>
+</head>
+<body>
+<header>
+  <h1>poison-snake replay</h1>
+  <span id="source" class="muted"></span>
+  <span id="options" class="muted"></span>
+</header>
+<main id="app">
+  <section class="card">
+    <svg id="board" role="img" aria-label="Game board"></svg>
+    <div class="controls">
+      <button id="first" title="First turn (r)">⏮</button>
+      <button id="prev" title="Previous turn (←)">‹</button>
+      <button id="play" title="Play or pause (Space)">▶</button>
+      <button id="next" title="Next turn (→)">›</button>
+      <button id="last" title="Last turn (t)">⏭</button>
+      <input id="slider" type="range" min="0" value="0" aria-label="Turn">
+      <span id="turn-label"></span>
+      <select id="speed" aria-label="Playback speed">
+        <option value="500">0.5×</option>
+        <option value="250" selected>1×</option>
+        <option value="100">2.5×</option>
+        <option value="40">6×</option>
+      </select>
+    </div>
+    <div class="toggles" id="toggles"></div>
+    <div class="legend">
+      <span><span class="swatch" style="background: var(--chosen)"></span>chosen</span>
+      <span><span class="swatch" style="background: var(--candidate)"></span>kept, not picked</span>
+      <span><span class="swatch" style="background: var(--safety)"></span>dropped: safety</span>
+      <span><span class="swatch" style="background: var(--space)"></span>dropped: space</span>
+      <span><span class="swatch" style="background: var(--escape)"></span>dropped: no escape</span>
+    </div>
+    <p class="keys muted">Space play · ←/→ turn · q/e previous/next elimination · r/t first/last · 1–8 or click a snake to follow it · hover a move to see its escape cells</p>
+  </section>
+  <aside class="card">
+    <h2 style="margin-top:0">Snakes</h2>
+    <ul id="snakes"></ul>
+    <h2>Decision</h2>
+    <div id="decision"></div>
+    <h2>Behavior tree</h2>
+    <ul id="tree" class="tree"></ul>
+  </aside>
+</main>
+<script id="replay-data" type="application/json">__REPLAY_DATA__</script>
+<script>
+"use strict";
+
+const S = 40; // pixels per board cell
+const MOVES = ["up", "down", "left", "right"];
+const DELTA = { up: [0, 1], down: [0, -1], left: [-1, 0], right: [1, 0] };
+const ARROW = { up: "↑", down: "↓", left: "←", right: "→" };
+const PALETTE = ["#7b2cbf", "#0e7490", "#c2410c", "#be185d", "#4d7c0f", "#475569", "#a16207", "#0f766e"];
+const KIND_ICON = { Selector: "?", Sequence: "→", Condition: "◇", Action: "▶" };
+const OVERLAYS = [
+  ["danger", "danger cells"], ["areas", "open area per move"], ["food", "food path"],
+  ["escape", "escape cells"], ["hunt", "hunt targets"],
+];
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+function loadReplay() {
+  try {
+    return JSON.parse(document.getElementById("replay-data").textContent);
+  } catch (error) {
+    return null;
+  }
+}
+
+// Build an HTML element: h("td", {className: "num"}, "12", otherNode)
+function h(tag, props = {}, ...children) {
+  const node = Object.assign(document.createElement(tag), props);
+  node.append(...children.filter(child => child !== null && child !== undefined));
+  return node;
+}
+
+function s(tag, attrs, parent) {
+  const node = document.createElementNS(SVG_NS, tag);
+  for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, value);
+  if (parent) parent.appendChild(node);
+  return node;
+}
+
+function main() {
+  const replay = loadReplay();
+  if (!replay || !replay.turns || !replay.turns.length) {
+    document.getElementById("app").replaceChildren(h("p", { className: "empty" },
+      "No replay data in this file. Make one with: python tools/explain_game.py game.jsonl -o replay.html"));
+    return;
+  }
+
+  const lastTurn = replay.turns.length - 1;
+  const view = {
+    turn: 0,
+    snake: replay.snakes.length ? replay.snakes[0].id : null,
+    focus: null, // the move whose escape cells are shown; null = the chosen move
+    playing: false,
+    timer: null,
+    show: Object.fromEntries(OVERLAYS.map(([key]) => [key, true])),
+  };
+  const eliminationTurns = replay.turns
+    .map((frame, i) => (Object.keys(frame.eliminated || {}).length ? i : -1))
+    .filter(i => i >= 0);
+
+  const el = id => document.getElementById(id);
+  const board = el("board"), slider = el("slider"), playButton = el("play");
+  slider.max = lastTurn;
+  el("source").textContent = replay.source + (replay.exact
+    ? " · decisions exactly as made"
+    : " · decisions re-computed with the current code");
+  const on = Object.entries(replay.options).filter(([, value]) => value).map(([key]) => key);
+  el("options").textContent = "options: " + (on.length ? on.join(", ") : "none");
+
+  const colorOf = id => PALETTE[Math.max(0, replay.snakes.findIndex(sn => sn.id === id)) % PALETTE.length];
+  const nameOf = id => (replay.snakes.find(sn => sn.id === id) || { name: id }).name;
+
+  // Where and why a snake left the game: {turn, cause}, or null if it never did.
+  function fate(id) {
+    for (let i = lastTurn; i >= 0; i--) {
+      const frame = replay.turns[i];
+      if (frame.snakes.some(sn => sn.id === id)) {
+        return id in (frame.eliminated || {}) ? { turn: frame.turn, cause: frame.eliminated[id] } : null;
+      }
+    }
+    return null;
+  }
+
+  // --- the board --------------------------------------------------------------
+
+  const toScreen = ([x, y]) => [x * S + S / 2, (replay.height - 1 - y) * S + S / 2];
+  const inBounds = ([x, y]) => x >= 0 && y >= 0 && x < replay.width && y < replay.height;
+
+  function drawBoard(frame, decision) {
+    const W = replay.width * S, H = replay.height * S;
+    board.setAttribute("viewBox", `${-S * 0.75} ${-S * 0.75} ${W + S * 1.5} ${H + S * 1.5}`);
+    board.replaceChildren();
+
+    for (let x = 0; x < replay.width; x++) {
+      for (let y = 0; y < replay.height; y++) {
+        const [cx, cy] = toScreen([x, y]);
+        s("rect", { x: cx - S / 2 + 1, y: cy - S / 2 + 1, width: S - 2, height: S - 2, rx: 4, fill: "var(--cell)" }, board);
+      }
+    }
+    for (let x = 0; x < replay.width; x++) {
+      const t = s("text", { x: x * S + S / 2, y: H + S * 0.5, "text-anchor": "middle", "font-size": 10, fill: "var(--muted)" }, board);
+      t.textContent = x;
+    }
+    for (let y = 0; y < replay.height; y++) {
+      const t = s("text", { x: -S * 0.4, y: (replay.height - 1 - y) * S + S / 2 + 4, "text-anchor": "middle", "font-size": 10, fill: "var(--muted)" }, board);
+      t.textContent = y;
+    }
+
+    if (decision && view.show.danger) {
+      for (const cell of decision.danger.filter(inBounds)) {
+        const [cx, cy] = toScreen(cell);
+        s("rect", { x: cx - S / 2 + 1, y: cy - S / 2 + 1, width: S - 2, height: S - 2, rx: 4, fill: "var(--danger)" }, board);
+      }
+    }
+
+    for (const cell of frame.food) {
+      const [cx, cy] = toScreen(cell);
+      s("circle", { cx, cy, r: S * 0.2, fill: "var(--food)" }, board);
+    }
+
+    for (const snake of frame.snakes) drawSnake(snake, snake.id === view.snake);
+
+    if (!decision) return;
+    const head = frame.snakes.find(sn => sn.id === view.snake).body[0];
+
+    if (view.show.food && decision.food_path) {
+      const points = [head, ...decision.food_path].map(toScreen).map(p => p.join(",")).join(" ");
+      s("polyline", { points, fill: "none", stroke: "var(--food)", "stroke-width": 3, "stroke-dasharray": "6 5", "stroke-linecap": "round" }, board);
+    }
+    if (view.show.hunt) {
+      for (const cell of decision.hunt_goals.filter(inBounds)) {
+        const [cx, cy] = toScreen(cell), r = S * 0.22;
+        const attrs = { stroke: "var(--hunt)", "stroke-width": 2.5, "stroke-linecap": "round" };
+        s("line", { x1: cx - r, y1: cy, x2: cx + r, y2: cy, ...attrs }, board);
+        s("line", { x1: cx, y1: cy - r, x2: cx, y2: cy + r, ...attrs }, board);
+        s("circle", { cx, cy, r: r * 0.7, fill: "none", ...attrs }, board);
+      }
+    }
+    if (view.show.escape) {
+      const move = view.focus || decision.move;
+      for (const cell of decision.escape[move] || []) {
+        const [cx, cy] = toScreen(cell);
+        s("circle", { cx, cy, r: S * 0.16, fill: "none", stroke: "var(--chosen)", "stroke-width": 2.5 }, board);
+      }
+    }
+
+    for (const move of MOVES) drawArrow(head, move, decision.moves[move], move === view.focus);
+
+    // A CLI log records what the snake really did, which can differ from the
+    // re-computed choice (usually a random tie). Ring the recorded move's tip.
+    if (decision.actual && decision.actual !== decision.move) {
+      const [dx, dy] = DELTA[decision.actual];
+      const [cx, cy] = toScreen(head);
+      s("circle", {
+        cx: cx + dx * S * 0.95, cy: cy - dy * S * 0.95, r: 9,
+        fill: "none", stroke: "var(--ink)", "stroke-width": 2.5,
+      }, board);
+    }
+
+    if (view.show.areas) {
+      for (const [move, area] of Object.entries(decision.areas)) {
+        const [dx, dy] = DELTA[move];
+        const [cx, cy] = toScreen([head[0] + dx, head[1] + dy]);
+        const label = s("text", {
+          x: cx + (dx === 0 ? S * 0.32 : 0), y: cy + (dy === 0 ? -S * 0.28 : 4),
+          "text-anchor": "middle", "font-size": 11, "font-weight": 700, fill: "var(--ink)",
+          stroke: "var(--panel)", "stroke-width": 3, "paint-order": "stroke",
+        }, board);
+        label.textContent = area;
+      }
+    }
+  }
+
+  function drawSnake(snake, selected) {
+    const group = s("g", { opacity: selected || !view.snake ? 1 : 0.8, style: "cursor: pointer" }, board);
+    group.addEventListener("click", () => selectSnake(snake.id));
+    const color = colorOf(snake.id), w = S * 0.6;
+    const body = snake.body;
+    for (let i = body.length - 1; i > 0; i--) {
+      const [ax, ay] = toScreen(body[i]), [bx, by] = toScreen(body[i - 1]);
+      s("rect", {
+        x: Math.min(ax, bx) - w / 2, y: Math.min(ay, by) - w / 2,
+        width: Math.abs(ax - bx) + w, height: Math.abs(ay - by) + w, rx: w * 0.35, fill: color,
+      }, group);
+    }
+    const [hx, hy] = toScreen(body[0]), size = S * 0.8;
+    s("rect", {
+      x: hx - size / 2, y: hy - size / 2, width: size, height: size, rx: 9, fill: color,
+      stroke: selected ? "var(--ink)" : "none", "stroke-width": 3,
+    }, group);
+    s("circle", { cx: hx, cy: hy, r: S * 0.09, fill: "#fff" }, group);
+  }
+
+  function arrowColor(info) {
+    if (info.verdict === "chosen") return "var(--chosen)";
+    if (info.verdict === "candidate") return "var(--candidate)";
+    return `var(--${info.stage})`;
+  }
+
+  function drawArrow(head, move, info, focused) {
+    const [cx, cy] = toScreen(head);
+    const [dx, dy] = DELTA[move];
+    const sx = dx, sy = -dy; // screen y grows downward
+    const color = arrowColor(info);
+    const width = info.verdict === "chosen" ? 5 : focused ? 4 : 2.5;
+    const start = S * 0.3, tip = S * 0.95, headLength = 10, headWidth = 7;
+    s("line", {
+      x1: cx + sx * start, y1: cy + sy * start,
+      x2: cx + sx * (tip - headLength), y2: cy + sy * (tip - headLength),
+      stroke: color, "stroke-width": width, "stroke-linecap": "round",
+      "stroke-dasharray": info.verdict === "eliminated" ? "5 4" : "none",
+    }, board);
+    const tx = cx + sx * tip, ty = cy + sy * tip;
+    const bx = tx - sx * (headLength + 2), by = ty - sy * (headLength + 2);
+    s("polygon", {
+      points: `${tx},${ty} ${bx - sy * headWidth},${by + sx * headWidth} ${bx + sy * headWidth},${by - sx * headWidth}`,
+      fill: color,
+    }, board);
+  }
+
+  // --- the side panel ---------------------------------------------------------
+
+  function drawSnakeList(frame) {
+    el("snakes").replaceChildren(...replay.snakes.map((snake, i) => {
+      const alive = frame.snakes.find(sn => sn.id === snake.id);
+      const gone = alive ? null : fate(snake.id);
+      const stat = alive
+        ? `health ${alive.health} · length ${alive.body.length}`
+        : gone ? `out on turn ${gone.turn}${gone.cause ? ` (${gone.cause})` : ""}` : "not on the board";
+      const item = h("li", { className: snake.id === view.snake ? "active" : "", title: `Press ${i + 1}` },
+        h("span", { className: "dot", style: `background:${colorOf(snake.id)}` }),
+        h("span", {}, snake.name),
+        h("span", { className: "stat muted" }, stat));
+      item.addEventListener("click", () => selectSnake(snake.id));
+      return item;
+    }));
+  }
+
+  function drawDecision(frame, decision) {
+    const panel = el("decision");
+    const name = nameOf(view.snake);
+    if (!decision) {
+      const gone = fate(view.snake);
+      panel.replaceChildren(h("p", { className: "muted" }, gone && gone.turn < frame.turn
+        ? `${name} was eliminated on turn ${gone.turn}${gone.cause ? ` (${gone.cause})` : ""}.`
+        : `${name} is not on the board this turn.`));
+      return;
+    }
+    const parts = [h("p", { className: "headline" }, `Turn ${frame.turn} · ${name} → ${ARROW[decision.move]} ${decision.move}`)];
+    if (decision.actual && decision.actual !== decision.move) {
+      parts.push(h("p", { className: "note" },
+        `The game recorded ${ARROW[decision.actual]} ${decision.actual}. Re-deciding with the current code gave ${decision.move}: ` +
+        (decision.moves[decision.actual].verdict === "candidate"
+          ? "both were kept, so a random tie-break (or an older version) explains it."
+          : "the current tree would not have kept that move, so an older version probably played this game.")));
+    } else if (decision.actual === null && !replay.exact && frame.eliminated && view.snake in frame.eliminated) {
+      parts.push(h("p", { className: "note" }, "This snake was eliminated this turn; the log doesn't record its last move."));
+    }
+
+    const rows = MOVES.map(move => {
+      const info = decision.moves[move];
+      const label = info.verdict === "chosen" ? "chosen" : info.verdict === "candidate" ? "kept" : info.stage;
+      const recorded = decision.actual === move && decision.actual !== decision.move;
+      const row = h("tr", {},
+        h("td", { className: "dir" }, `${ARROW[move]} ${move}`,
+          recorded ? h("div", { className: "recorded", title: "the move the game log recorded" }, "◯ recorded") : null),
+        h("td", {}, h("span", { className: "badge", style: `background:${arrowColor(info)}` }, label)),
+        h("td", {}, info.reason),
+        h("td", { className: "num", title: "open area" }, move in decision.areas ? String(decision.areas[move]) : ""));
+      row.dataset.move = move; // dataset is read-only, so h() can't assign it
+      row.addEventListener("mouseenter", () => { view.focus = move; drawBoard(frame, decision); });
+      row.addEventListener("mouseleave", () => { view.focus = null; drawBoard(frame, decision); });
+      return row;
+    });
+    parts.push(h("table", {}, h("tbody", {}, ...rows)));
+    parts.push(h("p", { className: "trace muted" }, decision.trace.slice(1).join(" › ")));
+    panel.replaceChildren(...parts);
+  }
+
+  function drawTree(decision) {
+    const decisive = new Set(decision ? decision.trace : []);
+    function node(n) {
+      const status = decision ? decision.visits[n.id] : undefined;
+      const item = h("li", { className: `${status || "skipped"}${decisive.has(n.name) ? " decisive" : ""}` },
+        h("span", { className: "label" },
+          h("span", { className: "icon", title: n.kind }, KIND_ICON[n.kind] || "•"),
+          h("span", { className: "name" }, n.name),
+          h("span", { className: "status" }, status ? (status === "success" ? "✓" : "✗") : "")));
+      if (n.children.length) item.append(h("ul", {}, ...n.children.map(node)));
+      return item;
+    }
+    el("tree").replaceChildren(node(replay.tree));
+  }
+
+  // --- navigation -------------------------------------------------------------
+
+  function render() {
+    const frame = replay.turns[view.turn];
+    const decision = frame.decisions[view.snake] || null;
+    drawBoard(frame, decision);
+    drawSnakeList(frame);
+    drawDecision(frame, decision);
+    drawTree(decision);
+    slider.value = view.turn;
+    el("turn-label").textContent = `turn ${frame.turn} of ${replay.turns[lastTurn].turn}`;
+    playButton.textContent = view.playing ? "⏸" : "▶";
+  }
+
+  function go(index) {
+    view.turn = Math.max(0, Math.min(lastTurn, index));
+    view.focus = null;
+    render();
+  }
+
+  function selectSnake(id) {
+    view.snake = id;
+    view.focus = null;
+    render();
+  }
+
+  function stop() {
+    view.playing = false;
+    clearTimeout(view.timer);
+    render();
+  }
+
+  function play() {
+    if (view.turn >= lastTurn) view.turn = 0;
+    view.playing = true;
+    const advance = () => {
+      if (!view.playing) return;
+      if (view.turn >= lastTurn) return stop();
+      go(view.turn + 1);
+      view.timer = setTimeout(advance, Number(el("speed").value));
+    };
+    render();
+    view.timer = setTimeout(advance, Number(el("speed").value));
+  }
+
+  function jumpToElimination(direction) {
+    const target = direction > 0
+      ? eliminationTurns.find(i => i > view.turn)
+      : [...eliminationTurns].reverse().find(i => i < view.turn);
+    if (target !== undefined) go(target);
+  }
+
+  el("first").addEventListener("click", () => go(0));
+  el("prev").addEventListener("click", () => go(view.turn - 1));
+  el("next").addEventListener("click", () => go(view.turn + 1));
+  el("last").addEventListener("click", () => go(lastTurn));
+  playButton.addEventListener("click", () => (view.playing ? stop() : play()));
+  slider.addEventListener("input", () => go(Number(slider.value)));
+
+  el("toggles").replaceChildren(...OVERLAYS.map(([key, label]) => {
+    const box = h("input", { type: "checkbox", checked: true });
+    box.addEventListener("change", () => { view.show[key] = box.checked; render(); });
+    return h("label", {}, box, " " + label);
+  }));
+
+  document.addEventListener("keydown", event => {
+    if (event.target.tagName === "SELECT" || event.ctrlKey || event.metaKey || event.altKey) return;
+    const actions = {
+      " ": () => (view.playing ? stop() : play()), k: () => (view.playing ? stop() : play()),
+      ArrowRight: () => go(view.turn + 1), l: () => go(view.turn + 1), d: () => go(view.turn + 1),
+      ArrowLeft: () => go(view.turn - 1), j: () => go(view.turn - 1), a: () => go(view.turn - 1),
+      e: () => jumpToElimination(1), q: () => jumpToElimination(-1),
+      r: () => go(0), t: () => go(lastTurn),
+    };
+    const snakeIndex = Number(event.key) - 1;
+    if (actions[event.key]) actions[event.key]();
+    else if (Number.isInteger(snakeIndex) && replay.snakes[snakeIndex]) selectSnake(replay.snakes[snakeIndex].id);
+    else return;
+    event.preventDefault();
+  });
+
+  render();
+}
+
+main();
+</script>
+</body>
+</html>
