@@ -8,7 +8,7 @@
   :root {
     --bg: #f6f5f1; --panel: #ffffff; --ink: #1f2328; --muted: #6b7280; --line: #e2e0da;
     --cell: #eceae4; --grid: #dad7cf;
-    --chosen: #15803d; --candidate: #2563eb; --safety: #dc2626; --space: #ea580c; --escape: #b7791f;
+    --chosen: #15803d; --candidate: #2563eb; --safety: #dc2626; --space: #ea580c; --escape: #b7791f; --worst: #0e7490;
     --food: #e11d48; --hunt: #9333ea; --danger: rgba(220, 38, 38, 0.16);
     --ok: #15803d; --fail: #b91c1c; --skip: #9ca3af;
   }
@@ -16,7 +16,7 @@
     :root {
       --bg: #15171c; --panel: #1e2128; --ink: #e5e7eb; --muted: #9ca3af; --line: #2c3039;
       --cell: #242830; --grid: #2f343e;
-      --chosen: #4ade80; --candidate: #60a5fa; --safety: #f87171; --space: #fb923c; --escape: #facc15;
+      --chosen: #4ade80; --candidate: #60a5fa; --safety: #f87171; --space: #fb923c; --escape: #facc15; --worst: #22d3ee;
       --food: #fb7185; --hunt: #c084fc; --danger: rgba(248, 113, 113, 0.2);
       --ok: #4ade80; --fail: #f87171; --skip: #6b7280;
     }
@@ -56,6 +56,8 @@
   .note { font-size: 12px; background: var(--bg); border-left: 3px solid var(--escape); padding: 4px 8px; margin: 6px 0; }
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
   td { padding: 5px 4px; border-top: 1px solid var(--line); vertical-align: top; }
+  th { font-size: 11px; font-weight: 600; color: var(--muted); text-align: left; padding: 0 4px 4px; }
+  th.num { text-align: right; }
   td.dir { white-space: nowrap; font-weight: 600; width: 64px; }
   td.num { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); width: 36px; }
   tr[data-move]:hover { background: var(--bg); }
@@ -108,6 +110,7 @@
       <span><span class="swatch" style="background: var(--safety)"></span>dropped: safety</span>
       <span><span class="swatch" style="background: var(--space)"></span>dropped: space</span>
       <span><span class="swatch" style="background: var(--escape)"></span>dropped: no escape</span>
+      <span><span class="swatch" style="background: var(--worst)"></span>dropped: worst case</span>
     </div>
     <p class="keys muted">Space play · ←/→ turn · q/e previous/next elimination · r/t first/last · 1–8 or click a snake to follow it · hover a move to see its escape cells</p>
   </section>
@@ -312,10 +315,14 @@ function main() {
     s("circle", { cx: hx, cy: hy, r: S * 0.09, fill: "#fff" }, group);
   }
 
+  const STAGE_COLOR = {
+    safety: "var(--safety)", space: "var(--space)", escape: "var(--escape)", "worst case": "var(--worst)",
+  };
+
   function arrowColor(info) {
     if (info.verdict === "chosen") return "var(--chosen)";
     if (info.verdict === "candidate") return "var(--candidate)";
-    return `var(--${info.stage})`;
+    return STAGE_COLOR[info.stage] || "var(--muted)";
   }
 
   function drawArrow(head, move, info, focused) {
@@ -387,13 +394,17 @@ function main() {
           recorded ? h("div", { className: "recorded", title: "the move the game log recorded" }, "◯ recorded") : null),
         h("td", {}, h("span", { className: "badge", style: `background:${arrowColor(info)}` }, label)),
         h("td", {}, info.reason),
-        h("td", { className: "num", title: "open area" }, move in decision.areas ? String(decision.areas[move]) : ""));
+        h("td", { className: "num", title: "open area" }, move in decision.areas ? String(decision.areas[move]) : ""),
+        h("td", { className: "num", title: "territory: cells reached before any enemy" },
+          move in (decision.territory || {}) ? String(decision.territory[move]) : ""));
       row.dataset.move = move; // dataset is read-only, so h() can't assign it
       row.addEventListener("mouseenter", () => { view.focus = move; drawBoard(frame, decision); });
       row.addEventListener("mouseleave", () => { view.focus = null; drawBoard(frame, decision); });
       return row;
     });
-    parts.push(h("table", {}, h("tbody", {}, ...rows)));
+    const heading = h("tr", {}, ...["move", "", "why", "area", "territory"].map(label =>
+      h("th", { className: label === "area" || label === "territory" ? "num" : "" }, label)));
+    parts.push(h("table", {}, h("thead", {}, heading), h("tbody", {}, ...rows)));
     parts.push(h("p", { className: "trace muted" }, decision.trace.slice(1).join(" › ")));
     panel.replaceChildren(...parts);
   }

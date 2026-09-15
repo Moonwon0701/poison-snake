@@ -16,13 +16,26 @@ is the Milestone 5 tree:
             │   └── Action "step toward food"
             └── Action "roomiest side"
 
-Options switch on three head-to-head improvements. Each changes one spot:
+Options switch on improvements. Each changes one spot in the tree.
 
-- lookahead: a third filter, "keep escapable moves", after "keep roomy moves".
+Head-to-head:
+
+- lookahead: a filter, "keep escapable moves", after "keep roomy moves".
 - length_race: "hungry" becomes "needs food", which is also true while
   we're not longer than every enemy.
 - hunt: a "hunt" branch between "eat" and "roomiest side" that closes in
   on a nearby shorter snake.
+
+Traps:
+
+- timed_area: "keep roomy moves" also counts cells that bodies will have
+  left by the time we get there.
+- worst_case_filter: a filter, "keep moves that survive enemy moves", that
+  wants our body to fit however nearby enemy heads move next.
+- voronoi_gate and voronoi_pick: a "measure territory" step counts, for each
+  move, the cells we'd reach before any enemy. The gate lets food and hunting
+  use only moves whose territory fits our body. The pick replaces
+  "roomiest side" with "most territory".
 
 The "keep" actions only narrow down the candidate moves on the blackboard.
 The leaves under "pick one" choose among what's left, so food and hunting
@@ -30,12 +43,13 @@ can never outrank safety, space or escape routes.
 """
 
 import functools
+import itertools
 import random
 from dataclasses import dataclass, field
 from typing import Any
 
 from agent.bt import Action, Condition, Node, Selector, Sequence
-from agent.pathfind import flood_fill, neighbors, shortest_path
+from agent.pathfind import distance_map, flood_fill, neighbors, shortest_path, timed_flood_fill
 from agent.world import MOVES, Point, World, step
 
 # Go for food at this health or below. Health drops by 1 each turn and
@@ -47,14 +61,23 @@ HUNGRY_HEALTH = 50
 # Hunt a shorter snake whose head is at most this many moves from ours.
 HUNT_DISTANCE = 2
 
+# worst_case_area() only considers enemy heads this close to where we move.
+# Farther heads can't cut us off in one move, and every extra enemy
+# multiplies the combinations to try by up to 4.
+WORST_CASE_RADIUS = 4
+
 
 @dataclass(frozen=True)
 class Options:
-    """Which head-to-head improvements the tree uses. All off: Milestone 5."""
+    """Which improvements the tree uses. All off: the Milestone 5 tree."""
 
     lookahead: bool = False  # prefer moves that leave an escape route next turn
     length_race: bool = False  # also look for food while not the longest snake
     hunt: bool = False  # go after nearby shorter snakes
+    timed_area: bool = False  # count cells that bodies leave before we arrive
+    worst_case_filter: bool = False  # our body must fit whatever nearby enemies do
+    voronoi_gate: bool = False  # food and hunting only through moves whose territory fits
+    voronoi_pick: bool = False  # otherwise go where our territory is biggest
 
 
 # Picked with tools/ab_test.py: 2,000 games each, one challenger against three
@@ -119,6 +142,24 @@ def reachable_area(world: World, move: str) -> int:
     return flood_fill(target, world.blocked_next_turn(), world.width, world.height)
 
 
+def timed_reachable_area(world: World, move: str) -> int:
+    """Like reachable_area(), but a body cell opens once it's gone when we arrive.
+
+    Segment i of a snake of length L leaves its cell after L - i moves. A cell
+    we'd reach in d moves is open if that has happened by then, so a region
+    closed off by our own body can still be big enough if the body unwinds
+    ahead of us. Growth from eating isn't predicted.
+    """
+    target = step(world.me.head, move)
+    if not world.in_bounds(target):
+        return 0
+    free_at: dict[Point, int] = {}
+    for snake in world.snakes:
+        for i, cell in enumerate(snake.body):
+            free_at[cell] = max(free_at.get(cell, 0), len(snake.body) - i)
+    return timed_flood_fill(target, free_at, world.width, world.height)
+
+
 def roomy_moves(areas: dict[str, int], length: int) -> list[str]:
     """Moves whose area can hold our whole body; if none can, the roomiest.
 
@@ -157,6 +198,60 @@ def escape_cells(world: World, move: str) -> list[Point]:
         for cell in neighbors(target, world.width, world.height)
         if cell not in blocked and not any(1 <= distance(cell, t) <= 2 for t in threats)
     ]
+
+
+def worst_case_area(world: World, move: str, radius: int = WORST_CASE_RADIUS) -> int:
+    """The area left after `move` if nearby enemy heads move as badly as possible.
+
+    Each enemy whose head is within `radius` of the cell we move to could
+    step onto any free cell next to its head, and that cell is then blocked
+    for us. We try every combination and keep the smallest area. The cell we
+    move to is left out: meeting there is a head-to-head, which the safety
+    filter already handles.
+    """
+    target = step(world.me.head, move)
+    blocked = world.blocked_next_turn()
+    choices = []
+    for enemy in world.enemies:
+        if distance(enemy.head, target) <= radius:
+            cells = [
+                c
+                for c in neighbors(enemy.head, world.width, world.height)
+                if c not in blocked and c != target
+            ]
+            if cells:
+                choices.append(cells)
+    return min(
+        flood_fill(target, blocked | set(combo), world.width, world.height)
+        for combo in itertools.product(*choices)  # one empty combo if no one is near
+    )
+
+
+def rival_distances(world: World) -> dict[Point, int]:
+    """For each cell, the fewest moves any enemy head needs to get there.
+
+    An enemy's next cell counts as 1 move, the same way territory() counts
+    ours. Bodies are treated as staying where they'll be after this turn.
+    """
+    starts = [
+        cell
+        for enemy in world.enemies
+        for cell in neighbors(enemy.head, world.width, world.height)
+    ]
+    return distance_map(starts, world.blocked_next_turn(), world.width, world.height)
+
+
+def territory(world: World, move: str, rivals: dict[Point, int]) -> int:
+    """After `move`, how many cells we'd reach strictly before every enemy.
+
+    This is our Voronoi area: the board divided up by whichever head can get
+    to each cell first. Cells an enemy reaches at the same time don't count,
+    since arriving together means a head-to-head. `rivals` comes from
+    rival_distances(), computed once per turn.
+    """
+    target = step(world.me.head, move)
+    mine = distance_map([target], world.blocked_next_turn(), world.width, world.height)
+    return sum(1 for cell, d in mine.items() if cell not in rivals or d < rivals[cell])
 
 
 def food_path(world: World, moves: list[str]) -> list[Point] | None:
@@ -207,7 +302,7 @@ def hunt_goals(world: World) -> list[Point]:
 
 
 # The filters, as named in Blackboard.stages and explain().
-SAFETY, SPACE, ESCAPE = "safety", "space", "escape"
+SAFETY, SPACE, ESCAPE, WORST_CASE = "safety", "space", "escape", "worst case"
 
 
 @dataclass
@@ -217,6 +312,9 @@ class Blackboard:
     world: World
     moves: list[str] = field(default_factory=list)  # candidates still allowed
     areas: dict[str, int] = field(default_factory=dict)  # flood-fill size per move
+    worst: dict[str, int] = field(default_factory=dict)  # worst-case area per move
+    territory: dict[str, int] = field(default_factory=dict)  # Voronoi area per move
+    food_path: list[Point] | None = None  # the path "step toward food" followed
     move: str | None = None  # the final choice
     rng: Any = random  # anything with .choice(); a seeded one makes games repeatable
     # The moves each filter kept, in order, as (stage, moves). Only explain()
@@ -243,11 +341,19 @@ def _keep_safe_moves(bb: Blackboard) -> bool:
     return bool(bb.moves)
 
 
-def _keep_roomy_moves(bb: Blackboard) -> bool:
-    bb.areas = {m: reachable_area(bb.world, m) for m in bb.moves}
+def _keep_roomy(bb: Blackboard, area_of) -> bool:
+    bb.areas = {m: area_of(bb.world, m) for m in bb.moves}
     bb.moves = roomy_moves(bb.areas, bb.world.me.length)
     bb.stages.append((SPACE, bb.moves))
     return True
+
+
+def _keep_roomy_moves(bb: Blackboard) -> bool:
+    return _keep_roomy(bb, reachable_area)
+
+
+def _keep_roomy_moves_timed(bb: Blackboard) -> bool:
+    return _keep_roomy(bb, timed_reachable_area)
 
 
 def _keep_escapable_moves(bb: Blackboard) -> bool:
@@ -258,6 +364,25 @@ def _keep_escapable_moves(bb: Blackboard) -> bool:
         bb.moves = escapable
     bb.stages.append((ESCAPE, bb.moves))
     return True
+
+
+def _keep_moves_that_survive_enemy_moves(bb: Blackboard) -> bool:
+    bb.worst = {m: worst_case_area(bb.world, m) for m in bb.moves}
+    fits = [m for m in bb.moves if bb.worst[m] >= bb.world.me.length]
+    if fits:  # never narrow down to nothing
+        bb.moves = fits
+    bb.stages.append((WORST_CASE, bb.moves))
+    return True
+
+
+def _measure_territory(bb: Blackboard) -> bool:
+    rivals = rival_distances(bb.world)  # the enemies' side, once for all moves
+    bb.territory = {m: territory(bb.world, m, rivals) for m in bb.moves}
+    return True
+
+
+def _moves_with_territory_to_spare(bb: Blackboard) -> list[str]:
+    return [m for m in bb.moves if bb.territory[m] >= bb.world.me.length]
 
 
 def _hungry(bb: Blackboard) -> bool:
@@ -272,22 +397,48 @@ def _needs_food(bb: Blackboard) -> bool:
     return _hungry(bb) or world.me.length <= longest_enemy
 
 
+def _step_toward_food_among(bb: Blackboard, moves: list[str]) -> bool:
+    if not moves:
+        return False
+    path = food_path(bb.world, moves)
+    if path is None:
+        return False
+    bb.food_path = path
+    bb.move = next(m for m in moves if step(bb.world.me.head, m) == path[0])
+    return True
+
+
 def _step_toward_food(bb: Blackboard) -> bool:
-    bb.move = move_toward_food(bb.world, bb.moves)
-    return bb.move is not None
+    return _step_toward_food_among(bb, bb.moves)
+
+
+def _step_toward_food_gated(bb: Blackboard) -> bool:
+    # Food inside space an enemy controls is where traps close, so only
+    # start down a path whose first move leaves us territory to spare.
+    return _step_toward_food_among(bb, _moves_with_territory_to_spare(bb))
 
 
 def _shorter_snake_nearby(bb: Blackboard) -> bool:
     return bool(prey(bb.world))
 
 
-def _close_in(bb: Blackboard) -> bool:
+def _close_in_among(bb: Blackboard, moves: list[str]) -> bool:
+    if not moves:
+        return False
     world = bb.world
     goals = hunt_goals(world)
-    gaps = {m: min(distance(step(world.me.head, m), g) for g in goals) for m in bb.moves}
+    gaps = {m: min(distance(step(world.me.head, m), g) for g in goals) for m in moves}
     closest = min(gaps.values())
-    bb.move = bb.rng.choice([m for m in bb.moves if gaps[m] == closest])
+    bb.move = bb.rng.choice([m for m in moves if gaps[m] == closest])
     return True
+
+
+def _close_in(bb: Blackboard) -> bool:
+    return _close_in_among(bb, bb.moves)
+
+
+def _close_in_gated(bb: Blackboard) -> bool:
+    return _close_in_among(bb, _moves_with_territory_to_spare(bb))
 
 
 def _roomiest_side(bb: Blackboard) -> bool:
@@ -296,15 +447,32 @@ def _roomiest_side(bb: Blackboard) -> bool:
     return True
 
 
+def _most_territory(bb: Blackboard) -> bool:
+    # Most territory first; among equals, the most open area; then chance.
+    best = max((bb.territory[m], bb.areas[m]) for m in bb.moves)
+    bb.move = bb.rng.choice([m for m in bb.moves if (bb.territory[m], bb.areas[m]) == best])
+    return True
+
+
 @functools.cache
 def build_tree(options: Options) -> Node:
     """Assemble the tree for `options`. Built once per combination."""
-    filters: list[Node] = [
+    gated = options.voronoi_gate
+    prepare: list[Node] = [
         Action("keep safe moves", _keep_safe_moves),
-        Action("keep roomy moves", _keep_roomy_moves),
+        Action(
+            "keep roomy moves",
+            _keep_roomy_moves_timed if options.timed_area else _keep_roomy_moves,
+        ),
     ]
     if options.lookahead:
-        filters.append(Action("keep escapable moves", _keep_escapable_moves))
+        prepare.append(Action("keep escapable moves", _keep_escapable_moves))
+    if options.worst_case_filter:
+        prepare.append(
+            Action("keep moves that survive enemy moves", _keep_moves_that_survive_enemy_moves)
+        )
+    if options.voronoi_gate or options.voronoi_pick:
+        prepare.append(Action("measure territory", _measure_territory))
 
     wants_food = (
         Condition("needs food", _needs_food)
@@ -312,7 +480,13 @@ def build_tree(options: Options) -> Node:
         else Condition("hungry", _hungry)
     )
     pickers: list[Node] = [
-        Sequence("eat", [wants_food, Action("step toward food", _step_toward_food)])
+        Sequence(
+            "eat",
+            [
+                wants_food,
+                Action("step toward food", _step_toward_food_gated if gated else _step_toward_food),
+            ],
+        )
     ]
     if options.hunt:
         pickers.append(
@@ -320,11 +494,14 @@ def build_tree(options: Options) -> Node:
                 "hunt",
                 [
                     Condition("shorter snake nearby", _shorter_snake_nearby),
-                    Action("close in", _close_in),
+                    Action("close in", _close_in_gated if gated else _close_in),
                 ],
             )
         )
-    pickers.append(Action("roomiest side", _roomiest_side))
+    if options.voronoi_pick:
+        pickers.append(Action("most territory", _most_territory))
+    else:
+        pickers.append(Action("roomiest side", _roomiest_side))
 
     return Selector(
         "choose a move",
@@ -336,7 +513,7 @@ def build_tree(options: Options) -> Node:
                     Action("go up anyway", _go_up_anyway),
                 ],
             ),
-            Sequence("normal turn", [*filters, Selector("pick one", pickers)]),
+            Sequence("normal turn", [*prepare, Selector("pick one", pickers)]),
         ],
     )
 
@@ -372,11 +549,13 @@ def explain(world: World, rng: Any = random, options: Options = DEFAULT_OPTIONS)
       match build_tree(options).describe(); nodes that didn't run are absent.
     - moves: for each of the four moves, a verdict ("chosen", "candidate" for
       kept but not picked, or "eliminated"), the filter that dropped it
-      (SAFETY, SPACE, ESCAPE or None) and a short reason.
+      (SAFETY, SPACE, ESCAPE, WORST_CASE or None) and a short reason.
     - areas: flood-fill size for each move that passed the safety filter.
+    - worst_case: worst-case area for each move the worst-case filter checked.
+    - territory: Voronoi area for each move, if the tree measured it.
     - danger: cells next to an enemy head at least as long as us.
     - escape: exit cells for each move the lookahead filter looked at.
-    - food_path: the path to food, if the tree tried to step toward food.
+    - food_path: the path to food, if the tree stepped toward food.
     - hunt_goals: the cells the hunt branch aimed for, if it ran.
     """
     tree = build_tree(options)
@@ -413,7 +592,6 @@ def explain(world: World, rng: Any = random, options: Options = DEFAULT_OPTIONS)
     if ESCAPE in (stage for stage, _ in bb.stages):
         considered = next(kept for stage, kept in bb.stages if stage == SPACE)
         escape = {m: _cells(escape_cells(world, m)) for m in considered}
-    path = food_path(world, bb.moves) if "step toward food" in ran else None
 
     return {
         "move": bb.move,
@@ -421,9 +599,11 @@ def explain(world: World, rng: Any = random, options: Options = DEFAULT_OPTIONS)
         "visits": {str(ids[node]): status.value for node, status in visits},
         "moves": {m: moves[m] for m in MOVES},
         "areas": dict(bb.areas),
+        "worst_case": dict(bb.worst),
+        "territory": dict(bb.territory),
         "danger": _cells(sorted(head_to_head_danger(world))),
         "escape": escape,
-        "food_path": _cells(path) if path is not None else None,
+        "food_path": _cells(bb.food_path) if bb.food_path is not None else None,
         "hunt_goals": _cells(hunt_goals(world)) if "close in" in ran else [],
     }
 
@@ -442,6 +622,11 @@ def _elimination_reason(bb: Blackboard, stage: str, move: str) -> str:
         if most >= world.me.length:
             return f"only {area} cells to move in, body is {world.me.length} long"
         return f"{area} cells, fewer than the {most} another move has"
+    if stage == WORST_CASE:
+        return (
+            f"only {bb.worst[move]} cells if nearby enemies move badly,"
+            f" body is {world.me.length} long"
+        )
     return "no safe exit the turn after"
 
 

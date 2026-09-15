@@ -5,7 +5,9 @@ unless a test says otherwise. Bodies are listed head first.
 """
 
 import random
+from dataclasses import replace
 
+import agent.strategy as strategy
 from agent.strategy import (
     DEFAULT_OPTIONS,
     HUNGRY_HEALTH,
@@ -15,6 +17,10 @@ from agent.strategy import (
     decide_with_trace,
     escape_cells,
     explain,
+    rival_distances,
+    territory,
+    timed_reachable_area,
+    worst_case_area,
     move_toward_food,
     reachable_area,
     roomy_moves,
@@ -432,3 +438,142 @@ def test_decide_uses_the_default_options():
     default = decide_with_trace(w, random.Random(1))
     assert default == decide_with_trace(w, random.Random(1), DEFAULT_OPTIONS)
     assert default[1][-2:] == ["hunt", "close in"]
+
+
+# --- territory and trap options -----------------------------------------------
+
+
+def board(my_body, enemies=(), width=11, height=11, **kwargs):
+    return World.from_json(make_state(my_body, enemies=enemies, width=width, height=height, **kwargs))
+
+
+def fake(values):
+    """A stand-in for territory() or worst_case_area() with fixed answers per move."""
+    return lambda world, move, *rest: values[move]
+
+
+OPEN = [(5, 5), (5, 4), (5, 3)]  # heading up in the middle of an empty board
+
+
+def test_territory_counts_only_cells_we_reach_first():
+    # A 7x1 corridor. Moving right puts us on (2, 0) first. (3, 0) is a tie
+    # with the enemy head at (5, 0), and (4, 0) is closer to it.
+    w = board([(1, 0), (0, 0)], enemies=[[(5, 0), (6, 0)]], width=7, height=1)
+    assert territory(w, "right", rival_distances(w)) == 1
+    assert reachable_area(w, "right") == 3
+
+
+def test_territory_is_the_whole_area_without_enemies():
+    w = world(OPEN)
+    assert territory(w, "up", rival_distances(w)) == reachable_area(w, "up")
+
+
+def test_worst_case_area_assumes_a_nearby_enemy_cuts_us_off():
+    # A 6x1 corridor: after moving right there are 4 cells ahead of us, but
+    # the enemy at (5, 0) could step to (4, 0) and leave us only 2.
+    w = board([(1, 0), (0, 0), (0, 0)], enemies=[[(5, 0)]], width=6, height=1)
+    assert reachable_area(w, "right") == 4
+    assert worst_case_area(w, "right") == 2
+
+
+def test_worst_case_area_ignores_enemies_too_far_to_matter():
+    w = board([(1, 0), (0, 0), (0, 0)], enemies=[[(10, 0)]], width=11, height=1)
+    assert worst_case_area(w, "right") == reachable_area(w, "right")
+
+
+SPIRAL = [(1, 1), (0, 1), (0, 2), (1, 2), (2, 2), (2, 1), (2, 0), (1, 0)]
+
+
+def test_timed_area_follows_a_body_that_unwinds_ahead_of_us():
+    # A 3x3 board filled by our 8-long body except (0, 0). Only "down", onto
+    # the tail, is safe. Right now that leaves 2 cells, but the body moves
+    # out of the way just in time to reach all 9.
+    w = board(SPIRAL, width=3, height=3)
+    assert safe_moves(w) == ["down"]
+    assert reachable_area(w, "down") == 2
+    assert timed_reachable_area(w, "down") == 9
+
+
+def test_timed_area_option_changes_the_roomy_filter():
+    w = board(SPIRAL, width=3, height=3)
+    assert explain(w, random.Random(0), Options())["areas"] == {"down": 2}
+    assert explain(w, random.Random(0), Options(timed_area=True))["areas"] == {"down": 9}
+
+
+def test_worst_case_filter_drops_moves_nearby_enemies_could_seal(monkeypatch):
+    w = world(OPEN)
+    monkeypatch.setattr(strategy, "worst_case_area", fake({"up": 2, "left": 50, "right": 50}))
+    options = Options(worst_case_filter=True)
+    assert "up" not in {decide(w, random.Random(seed), options) for seed in range(30)}
+    e = explain(w, random.Random(0), options)
+    assert e["moves"]["up"]["stage"] == "worst case"
+    assert e["moves"]["up"]["reason"] == "only 2 cells if nearby enemies move badly, body is 3 long"
+    assert e["worst_case"] == {"up": 2, "left": 50, "right": 50}
+
+
+def test_worst_case_filter_keeps_everything_when_nothing_fits(monkeypatch):
+    w = world(OPEN)
+    monkeypatch.setattr(strategy, "worst_case_area", fake({"up": 2, "left": 2, "right": 2}))
+    e = explain(w, random.Random(0), Options(worst_case_filter=True))
+    assert all(e["moves"][m]["verdict"] != "eliminated" for m in ("up", "left", "right"))
+
+
+def test_voronoi_gate_keeps_food_paths_to_moves_with_territory(monkeypatch):
+    w = world(OPEN, food=[(5, 8)], health=10)
+    options = Options(voronoi_gate=True)
+    # With no enemies every move's territory is the whole board: food as usual.
+    assert decide_with_trace(w, random.Random(0), options) == (
+        "up",
+        ["choose a move", "normal turn", "pick one", "eat", "step toward food"],
+    )
+    # Only "right" has territory to spare: the path to food must start there.
+    monkeypatch.setattr(strategy, "territory", fake({"up": 1, "left": 1, "right": 50}))
+    move, trace = decide_with_trace(w, random.Random(0), options)
+    assert (move, trace[-1]) == ("right", "step toward food")
+    assert explain(w, random.Random(0), options)["food_path"][0] == [6, 5]
+    # No move has territory to spare: skip food altogether.
+    monkeypatch.setattr(strategy, "territory", fake({"up": 1, "left": 1, "right": 1}))
+    assert decide_with_trace(w, random.Random(0), options)[1][-1] == "roomiest side"
+
+
+def test_voronoi_gate_applies_to_hunting(monkeypatch):
+    w = world(HUNTER, enemies=[[(7, 5), (8, 5), (9, 5)]])
+    monkeypatch.setattr(strategy, "territory", fake({"up": 50, "left": 50, "right": 1}))
+    move, trace = decide_with_trace(w, random.Random(0), Options(hunt=True, voronoi_gate=True))
+    assert move in {"up", "left"}
+    assert trace[-2:] == ["hunt", "close in"]
+
+
+def test_voronoi_pick_goes_where_our_territory_is_biggest(monkeypatch):
+    w = world(OPEN)
+    monkeypatch.setattr(strategy, "territory", fake({"up": 10, "left": 30, "right": 20}))
+    move, trace = decide_with_trace(w, random.Random(0), Options(voronoi_pick=True))
+    assert (move, trace[-1]) == ("left", "most territory")
+    assert explain(w, random.Random(0), Options(voronoi_pick=True))["territory"] == {
+        "up": 10,
+        "left": 30,
+        "right": 20,
+    }
+
+
+def test_voronoi_pick_with_a_real_enemy():
+    w = world(OPEN, enemies=[[(9, 5), (10, 5), (10, 6)]])
+    rivals = rival_distances(w)
+    areas = {m: territory(w, m, rivals) for m in safe_moves(w)}
+    for seed in range(10):
+        move = decide(w, random.Random(seed), Options(voronoi_pick=True))
+        assert areas[move] == max(areas.values())
+
+
+def test_trap_options_add_their_nodes_to_the_tree():
+    def names(options):
+        return [node.name for node in build_tree(options).walk()]
+
+    everything = replace(
+        DEFAULT_OPTIONS, timed_area=True, worst_case_filter=True, voronoi_gate=True, voronoi_pick=True
+    )
+    assert "keep moves that survive enemy moves" in names(everything)
+    assert "measure territory" in names(everything)
+    assert "most territory" in names(everything)
+    assert "roomiest side" not in names(everything)
+    assert "measure territory" not in names(DEFAULT_OPTIONS)
