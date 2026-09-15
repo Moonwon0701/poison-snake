@@ -230,7 +230,7 @@ function main() {
       t.textContent = y;
     }
 
-    if (decision && view.show.danger) {
+    if (decision && view.show.danger && decision.danger) {
       for (const cell of decision.danger.filter(inBounds)) {
         const [cx, cy] = toScreen(cell);
         s("rect", { x: cx - S / 2 + 1, y: cy - S / 2 + 1, width: S - 2, height: S - 2, rx: 4, fill: "var(--danger)" }, board);
@@ -251,7 +251,7 @@ function main() {
       const points = [head, ...decision.food_path].map(toScreen).map(p => p.join(",")).join(" ");
       s("polyline", { points, fill: "none", stroke: "var(--food)", "stroke-width": 3, "stroke-dasharray": "6 5", "stroke-linecap": "round" }, board);
     }
-    if (view.show.hunt) {
+    if (view.show.hunt && decision.hunt_goals) {
       for (const cell of decision.hunt_goals.filter(inBounds)) {
         const [cx, cy] = toScreen(cell), r = S * 0.22;
         const attrs = { stroke: "var(--hunt)", "stroke-width": 2.5, "stroke-linecap": "round" };
@@ -260,7 +260,7 @@ function main() {
         s("circle", { cx, cy, r: r * 0.7, fill: "none", ...attrs }, board);
       }
     }
-    if (view.show.escape) {
+    if (view.show.escape && decision.escape) {
       const move = view.focus || decision.move;
       for (const cell of decision.escape[move] || []) {
         const [cx, cy] = toScreen(cell);
@@ -268,7 +268,7 @@ function main() {
       }
     }
 
-    for (const move of MOVES) drawArrow(head, move, decision.moves[move], move === view.focus);
+    for (const move of MOVES) drawArrow(head, move, moveInfo(decision, move), move === view.focus);
 
     // A CLI log records what the snake really did, which can differ from the
     // re-computed choice (usually a random tie). Ring the recorded move's tip.
@@ -281,8 +281,12 @@ function main() {
       }, board);
     }
 
+    // An RL snake labels each move with its probability; a behavior tree with its open area.
+    const labels = decision.policy
+      ? Object.fromEntries(MOVES.filter(move => decision.mask[move]).map(move => [move, percent(decision.policy[move])]))
+      : decision.areas;
     if (view.show.areas) {
-      for (const [move, area] of Object.entries(decision.areas)) {
+      for (const [move, area] of Object.entries(labels)) {
         const [dx, dy] = DELTA[move];
         const [cx, cy] = toScreen([head[0] + dx, head[1] + dy]);
         const label = s("text", {
@@ -318,6 +322,17 @@ function main() {
   const STAGE_COLOR = {
     safety: "var(--safety)", space: "var(--space)", escape: "var(--escape)", "worst case": "var(--worst)",
   };
+
+  const percent = p => `${Math.round(p * 100)}%`;
+
+  // A behavior tree explains every move; an RL snake only says which moves
+  // its mask allowed and how likely it was to pick each. Give both one shape.
+  function moveInfo(decision, move) {
+    if (!decision.policy) return decision.moves[move];
+    if (move === decision.move) return { verdict: "chosen", reason: "most likely allowed move" };
+    if (decision.mask[move]) return { verdict: "candidate", reason: "allowed" };
+    return { verdict: "eliminated", stage: "safety", reason: "masked: hits a wall or a body" };
+  }
 
   function arrowColor(info) {
     if (info.verdict === "chosen") return "var(--chosen)";
@@ -378,15 +393,16 @@ function main() {
     if (decision.actual && decision.actual !== decision.move) {
       parts.push(h("p", { className: "note" },
         `The game recorded ${ARROW[decision.actual]} ${decision.actual}. Re-deciding with the current code gave ${decision.move}: ` +
-        (decision.moves[decision.actual].verdict === "candidate"
+        (moveInfo(decision, decision.actual).verdict === "candidate"
           ? "both were kept, so a random tie-break (or an older version) explains it."
           : "the current tree would not have kept that move, so an older version probably played this game.")));
     } else if (decision.actual === null && !replay.exact && frame.eliminated && view.snake in frame.eliminated) {
       parts.push(h("p", { className: "note" }, "This snake was eliminated this turn; the log doesn't record its last move."));
     }
 
+    const rl = Boolean(decision.policy);
     const rows = MOVES.map(move => {
-      const info = decision.moves[move];
+      const info = moveInfo(decision, move);
       const label = info.verdict === "chosen" ? "chosen" : info.verdict === "candidate" ? "kept" : info.stage;
       const recorded = decision.actual === move && decision.actual !== decision.move;
       const row = h("tr", {},
@@ -394,7 +410,9 @@ function main() {
           recorded ? h("div", { className: "recorded", title: "the move the game log recorded" }, "◯ recorded") : null),
         h("td", {}, h("span", { className: "badge", style: `background:${arrowColor(info)}` }, label)),
         h("td", {}, info.reason),
-        h("td", { className: "num", title: "open area" }, move in decision.areas ? String(decision.areas[move]) : ""),
+        rl
+          ? h("td", { className: "num", title: "probability of picking this move" }, percent(decision.policy[move]))
+          : h("td", { className: "num", title: "open area" }, move in decision.areas ? String(decision.areas[move]) : ""),
         h("td", { className: "num", title: "territory: cells reached before any enemy" },
           move in (decision.territory || {}) ? String(decision.territory[move]) : ""));
       row.dataset.move = move; // dataset is read-only, so h() can't assign it
@@ -402,14 +420,21 @@ function main() {
       row.addEventListener("mouseleave", () => { view.focus = null; drawBoard(frame, decision); });
       return row;
     });
-    const heading = h("tr", {}, ...["move", "", "why", "area", "territory"].map(label =>
-      h("th", { className: label === "area" || label === "territory" ? "num" : "" }, label)));
+    const columns = rl ? ["move", "", "why", "chance", ""] : ["move", "", "why", "area", "territory"];
+    const heading = h("tr", {}, ...columns.map((label, i) => h("th", { className: i >= 3 ? "num" : "" }, label)));
     parts.push(h("table", {}, h("thead", {}, heading), h("tbody", {}, ...rows)));
-    parts.push(h("p", { className: "trace muted" }, decision.trace.slice(1).join(" › ")));
+    parts.push(h("p", { className: "trace muted" }, rl
+      ? `RL policy · value estimate ${decision.value.toFixed(2)} (expected future reward)`
+      : decision.trace.slice(1).join(" › ")));
     panel.replaceChildren(...parts);
   }
 
   function drawTree(decision) {
+    if (decision && decision.policy) {
+      el("tree").replaceChildren(h("li", { className: "muted" },
+        "This snake is a trained neural network, so it has no behavior tree. The tree shows up when you select a behavior-tree snake."));
+      return;
+    }
     const decisive = new Set(decision ? decision.trace : []);
     function node(n) {
       const status = decision ? decision.visits[n.id] : undefined;
