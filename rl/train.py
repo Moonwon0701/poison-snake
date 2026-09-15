@@ -19,7 +19,7 @@ from pathlib import Path
 
 from sb3_contrib import MaskablePPO
 from sb3_contrib.common.maskable.callbacks import MaskableEvalCallback
-from stable_baselines3.common.callbacks import CheckpointCallback
+from stable_baselines3.common.callbacks import BaseCallback, CheckpointCallback
 from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecEnv
 
 import torch
@@ -28,6 +28,20 @@ from rl.envs import STAGES, MaskCachingVecEnv, make_env
 from rl.model import new_model
 
 RUNS = Path("runs")
+
+
+class StopAfter(BaseCallback):
+    """Ends training once `minutes` have passed, so a stage fits its time budget."""
+
+    def __init__(self, minutes: float):
+        super().__init__()
+        self.seconds = minutes * 60
+
+    def _on_training_start(self) -> None:
+        self.start = time.perf_counter()
+
+    def _on_step(self) -> bool:
+        return time.perf_counter() - self.start < self.seconds
 
 
 def build_vec_env(stage: str, n_envs: int, seed: int, subprocess: bool = True) -> VecEnv:
@@ -59,6 +73,7 @@ def train(
     subprocess: bool = True,
     runs_dir: Path = RUNS,
     threads: int | None = None,
+    max_minutes: float | None = None,
 ) -> Path:
     """Train for `timesteps` moves on `stage`. Returns the saved model's path.
 
@@ -92,7 +107,10 @@ def train(
             verbose=0,
         ),
     ]
+    if max_minutes:
+        callbacks.append(StopAfter(max_minutes))
 
+    steps_before = model.num_timesteps if start_from else 0
     start = time.perf_counter()
     model.learn(
         total_timesteps=timesteps,
@@ -104,10 +122,13 @@ def train(
 
     model_path = run_dir / "model.zip"
     model.save(model_path)
+    trained = int(model.num_timesteps) - steps_before
     summary = {
         "stage": stage,
         "description": STAGES[stage].description,
-        "timesteps": timesteps,
+        "timesteps": trained,
+        "timestep_budget": timesteps,
+        "minute_budget": max_minutes,
         "total_timesteps": int(model.num_timesteps),
         "started_from": str(start_from) if start_from else None,
         "n_envs": n_envs,
@@ -115,7 +136,7 @@ def train(
         "torch_threads": torch.get_num_threads(),
         "seed": seed,
         "seconds": round(elapsed, 1),
-        "steps_per_second": round(timesteps / elapsed),
+        "steps_per_second": round(trained / elapsed),
     }
     (run_dir / "stage.json").write_text(json.dumps(summary, indent=2))
     env.close()
@@ -136,6 +157,7 @@ def main() -> None:
     parser.add_argument("--eval-every", type=int, default=200_000)
     parser.add_argument("--eval-games", type=int, default=50)
     parser.add_argument("--threads", type=int, help="PyTorch CPU threads (default: all cores)")
+    parser.add_argument("--max-minutes", type=float, help="stop and save after this long")
     args = parser.parse_args()
     train(
         args.stage,
@@ -148,6 +170,7 @@ def main() -> None:
         eval_every=args.eval_every,
         eval_games=args.eval_games,
         threads=args.threads,
+        max_minutes=args.max_minutes,
     )
 
 
