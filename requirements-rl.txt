@@ -1,0 +1,12 @@
+# Reinforcement learning extras (rl/ and tests/test_rl.py). The snake server
+# itself only needs requirements.txt.
+#
+#   pip install -r requirements-rl.txt
+#
+# torch comes from PyTorch's CUDA 12.8 index, which supports RTX 50-series GPUs.
+-r requirements.txt
+--extra-index-url https://download.pytorch.org/whl/cu128
+torch==2.11.0+cu128
+stable-baselines3==2.9.0
+sb3-contrib==2.9.0
+tensorboard==2.21.0

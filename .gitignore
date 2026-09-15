@@ -7,6 +7,9 @@ __pycache__/
 venv/
 .pytest_cache/
 
+# Reinforcement learning runs: checkpoints and TensorBoard logs
+runs/
+
 # Battlesnake CLI binary, if you drop it in the repo folder
 battlesnake
 battlesnake.exe
