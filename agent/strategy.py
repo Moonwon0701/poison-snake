@@ -159,8 +159,8 @@ def escape_cells(world: World, move: str) -> list[Point]:
     ]
 
 
-def move_toward_food(world: World, moves: list[str]) -> str | None:
-    """First step of the shortest path to the nearest food, or None.
+def food_path(world: World, moves: list[str]) -> list[Point] | None:
+    """Shortest path from our head to the nearest food, or None.
 
     The path must start with one of `moves`, so food never outranks safety
     or space: cells next to our head that `moves` ruled out count as blocked.
@@ -170,10 +170,15 @@ def move_toward_food(world: World, moves: list[str]) -> str | None:
     head = world.me.head
     blocked = world.blocked_next_turn()
     blocked |= {step(head, m) for m in MOVES if m not in moves}
-    path = shortest_path(head, world.food, blocked, world.width, world.height)
+    return shortest_path(head, world.food, blocked, world.width, world.height)
+
+
+def move_toward_food(world: World, moves: list[str]) -> str | None:
+    """First step of food_path(), or None if no food can be reached."""
+    path = food_path(world, moves)
     if path is None:
         return None
-    return next(m for m in moves if step(head, m) == path[0])
+    return next(m for m in moves if step(world.me.head, m) == path[0])
 
 
 def prey(world: World) -> list[Point]:
@@ -185,7 +190,24 @@ def prey(world: World) -> list[Point]:
     ]
 
 
+def hunt_goals(world: World) -> list[Point]:
+    """The cells our prey's heads could move into next.
+
+    If a prey moves onto one of these cells together with us, the collision
+    kills it, not us.
+    """
+    return [
+        cell
+        for head in prey(world)
+        for cell in neighbors(head, world.width, world.height)
+    ]
+
+
 # --- behavior tree ----------------------------------------------------------
+
+
+# The filters, as named in Blackboard.stages and explain().
+SAFETY, SPACE, ESCAPE = "safety", "space", "escape"
 
 
 @dataclass
@@ -197,6 +219,9 @@ class Blackboard:
     areas: dict[str, int] = field(default_factory=dict)  # flood-fill size per move
     move: str | None = None  # the final choice
     rng: Any = random  # anything with .choice(); a seeded one makes games repeatable
+    # The moves each filter kept, in order, as (stage, moves). Only explain()
+    # reads this; it's how the viewer knows which filter dropped which move.
+    stages: list[tuple[str, list[str]]] = field(default_factory=list)
 
 
 def _no_safe_moves(bb: Blackboard) -> bool:
@@ -214,12 +239,14 @@ def _go_up_anyway(bb: Blackboard) -> bool:
 
 def _keep_safe_moves(bb: Blackboard) -> bool:
     bb.moves = safe_moves(bb.world)
+    bb.stages.append((SAFETY, bb.moves))
     return bool(bb.moves)
 
 
 def _keep_roomy_moves(bb: Blackboard) -> bool:
     bb.areas = {m: reachable_area(bb.world, m) for m in bb.moves}
     bb.moves = roomy_moves(bb.areas, bb.world.me.length)
+    bb.stages.append((SPACE, bb.moves))
     return True
 
 
@@ -229,6 +256,7 @@ def _keep_escapable_moves(bb: Blackboard) -> bool:
     escapable = [m for m in bb.moves if escape_cells(bb.world, m)]
     if escapable:
         bb.moves = escapable
+    bb.stages.append((ESCAPE, bb.moves))
     return True
 
 
@@ -254,14 +282,8 @@ def _shorter_snake_nearby(bb: Blackboard) -> bool:
 
 
 def _close_in(bb: Blackboard) -> bool:
-    # Aim for the cells a prey's head could move into next: if it goes there
-    # too, the collision kills it, not us.
     world = bb.world
-    goals = [
-        cell
-        for head in prey(world)
-        for cell in neighbors(head, world.width, world.height)
-    ]
+    goals = hunt_goals(world)
     gaps = {m: min(distance(step(world.me.head, m), g) for g in goals) for m in bb.moves}
     closest = min(gaps.values())
     bb.move = bb.rng.choice([m for m in bb.moves if gaps[m] == closest])
@@ -335,3 +357,93 @@ def decide_with_trace(
 
 def decide(world: World, rng: Any = random, options: Options = DEFAULT_OPTIONS) -> str:
     return decide_with_trace(world, rng, options)[0]
+
+
+# --- explaining a decision --------------------------------------------------
+
+
+def explain(world: World, rng: Any = random, options: Options = DEFAULT_OPTIONS) -> dict:
+    """Run the tree like decide(), and report why it chose what it did.
+
+    Returns plain JSON-ready data for tools/explain_game.py and the viewer:
+
+    - move, trace: as from decide_with_trace().
+    - visits: {node id: "success" or "failure"} for every node that ran. Ids
+      match build_tree(options).describe(); nodes that didn't run are absent.
+    - moves: for each of the four moves, a verdict ("chosen", "candidate" for
+      kept but not picked, or "eliminated"), the filter that dropped it
+      (SAFETY, SPACE, ESCAPE or None) and a short reason.
+    - areas: flood-fill size for each move that passed the safety filter.
+    - danger: cells next to an enemy head at least as long as us.
+    - escape: exit cells for each move the lookahead filter looked at.
+    - food_path: the path to food, if the tree tried to step toward food.
+    - hunt_goals: the cells the hunt branch aimed for, if it ran.
+    """
+    tree = build_tree(options)
+    bb = Blackboard(world, rng=rng)
+    trace: list[str] = []
+    visits: list = []
+    tree.tick(bb, trace, visits)
+    ids = {node: i for i, node in enumerate(tree.walk())}
+    ran = {node.name for node, _ in visits}
+
+    moves: dict[str, dict] = {}
+    remaining = list(MOVES)
+    for stage, kept in bb.stages:
+        for move in remaining:
+            if move not in kept:
+                reason = _elimination_reason(bb, stage, move)
+                moves[move] = {"verdict": "eliminated", "stage": stage, "reason": reason}
+        remaining = kept
+    if not bb.stages:  # "no way out": every move failed the safety check
+        for move in MOVES:
+            reason = _elimination_reason(bb, SAFETY, move)
+            moves[move] = {"verdict": "eliminated", "stage": SAFETY, "reason": reason}
+        remaining = []
+    for move in remaining:
+        moves[move] = {"verdict": "candidate", "stage": None, "reason": "passed every filter"}
+    chosen = moves[bb.move]
+    if chosen["verdict"] == "eliminated":
+        chosen["reason"] = f"no safe move ({chosen['reason']}), {trace[-1]}"
+    else:
+        chosen["reason"] = trace[-1]
+    chosen["verdict"] = "chosen"
+
+    escape = {}
+    if ESCAPE in (stage for stage, _ in bb.stages):
+        considered = next(kept for stage, kept in bb.stages if stage == SPACE)
+        escape = {m: _cells(escape_cells(world, m)) for m in considered}
+    path = food_path(world, bb.moves) if "step toward food" in ran else None
+
+    return {
+        "move": bb.move,
+        "trace": trace,
+        "visits": {str(ids[node]): status.value for node, status in visits},
+        "moves": {m: moves[m] for m in MOVES},
+        "areas": dict(bb.areas),
+        "danger": _cells(sorted(head_to_head_danger(world))),
+        "escape": escape,
+        "food_path": _cells(path) if path is not None else None,
+        "hunt_goals": _cells(hunt_goals(world)) if "close in" in ran else [],
+    }
+
+
+def _elimination_reason(bb: Blackboard, stage: str, move: str) -> str:
+    world = bb.world
+    target = step(world.me.head, move)
+    if stage == SAFETY:
+        if not world.in_bounds(target):
+            return "wall"
+        if target in world.blocked_next_turn():
+            return "body"
+        return "next to an enemy head at least as long as us"
+    if stage == SPACE:
+        area, most = bb.areas[move], max(bb.areas.values())
+        if most >= world.me.length:
+            return f"only {area} cells to move in, body is {world.me.length} long"
+        return f"{area} cells, fewer than the {most} another move has"
+    return "no safe exit the turn after"
+
+
+def _cells(points) -> list[list[int]]:
+    return [list(p) for p in points]

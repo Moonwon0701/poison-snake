@@ -10,9 +10,11 @@ from agent.strategy import (
     DEFAULT_OPTIONS,
     HUNGRY_HEALTH,
     Options,
+    build_tree,
     decide,
     decide_with_trace,
     escape_cells,
+    explain,
     move_toward_food,
     reachable_area,
     roomy_moves,
@@ -345,6 +347,83 @@ def test_hunt_ignores_snakes_that_are_too_far_or_not_shorter():
     for w in (far, longer):
         _, trace = decide_with_trace(w, random.Random(0), Options(hunt=True))
         assert trace[-1] == "roomiest side"
+
+
+# --- explain ----------------------------------------------------------------
+
+
+def test_explain_says_which_filter_dropped_each_move():
+    e = explain(world(POCKET_ME, enemies=[POCKET_ENEMY]), random.Random(0), Options())
+    assert e["move"] == "right"
+    assert e["moves"]["up"] == {"verdict": "eliminated", "stage": "safety", "reason": "body"}
+    assert e["moves"]["left"]["stage"] == "space"
+    assert e["moves"]["left"]["reason"] == "only 3 cells to move in, body is 4 long"
+    assert e["moves"]["down"]["stage"] == "space"
+    assert e["moves"]["right"] == {"verdict": "chosen", "stage": None, "reason": "roomiest side"}
+    assert e["areas"]["left"] == 3
+
+
+def test_explain_names_walls_and_enemy_heads():
+    corner = explain(world([(0, 0), (0, 1), (0, 2)]), random.Random(0))
+    assert corner["moves"]["left"]["reason"] == "wall"
+    assert corner["moves"]["down"]["reason"] == "wall"
+    risky = explain(
+        world([(5, 5), (4, 5), (3, 5)], enemies=[[(7, 5), (8, 5), (9, 5), (10, 5)]]),
+        random.Random(0),
+    )
+    assert risky["moves"]["right"]["stage"] == "safety"
+    assert "enemy head" in risky["moves"]["right"]["reason"]
+    assert [6, 5] in risky["danger"]
+
+
+def test_explain_marks_the_move_that_gets_cornered():
+    e = explain(world(CORNER_ME, enemies=[CORNER_ENEMY]), random.Random(0), Options(lookahead=True))
+    assert e["moves"]["right"] == {
+        "verdict": "eliminated",
+        "stage": "escape",
+        "reason": "no safe exit the turn after",
+    }
+    assert e["escape"]["right"] == []
+    assert e["escape"]["up"] != []
+
+
+def test_explain_when_there_is_no_way_out():
+    e = explain(world([(0, 0), (0, 1), (1, 1), (1, 0), (1, 0)]), random.Random(0))
+    assert e["move"] == "up"
+    assert e["moves"]["up"]["verdict"] == "chosen"
+    assert e["moves"]["up"]["reason"] == "no safe move (body), go up anyway"
+    assert all(info["stage"] == "safety" for info in e["moves"].values())
+    assert e["areas"] == {}
+
+
+def test_explain_shows_the_food_path_and_hunt_goals():
+    fed = explain(world([(5, 5), (5, 4), (5, 3)], food=[(5, 8)], health=10), random.Random(0))
+    assert fed["food_path"] == [[5, 6], [5, 7], [5, 8]]
+    assert fed["moves"]["up"]["reason"] == "step toward food"
+    assert fed["hunt_goals"] == []
+    hunt = explain(world(HUNTER, enemies=[[(7, 5), (8, 5), (9, 5)]]), random.Random(0), Options(hunt=True))
+    assert [6, 5] in hunt["hunt_goals"]
+    assert hunt["food_path"] is None
+
+
+def test_explain_visits_line_up_with_the_tree():
+    e = explain(world([(5, 5), (5, 4), (5, 3)], food=[(5, 8)], health=10), random.Random(0))
+    ids = {node.name: str(i) for i, node in enumerate(build_tree(DEFAULT_OPTIONS).walk())}
+    assert e["visits"][ids["step toward food"]] == "success"
+    assert e["visits"][ids["no safe moves"]] == "failure"
+    assert ids["roomiest side"] not in e["visits"]
+
+
+def test_explain_picks_the_same_move_as_decide():
+    boards = [
+        world([(5, 5), (5, 4), (5, 3)]),
+        world(POCKET_ME, enemies=[POCKET_ENEMY]),
+        world(CORNER_ME, enemies=[CORNER_ENEMY]),
+        world(HUNTER, enemies=[[(7, 5), (8, 5), (9, 5)]], food=[(0, 0)]),
+    ]
+    for w in boards:
+        for seed in range(10):
+            assert explain(w, random.Random(seed))["move"] == decide(w, random.Random(seed))
 
 
 def test_decide_uses_the_default_options():
