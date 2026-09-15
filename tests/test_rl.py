@@ -23,7 +23,8 @@ from rl.agent import RLPolicy  # noqa: E402
 from rl.envs import make_env  # noqa: E402
 from rl.evaluate import evaluate, report  # noqa: E402
 from rl.model import SnakeCNN  # noqa: E402
-from rl.train import build_vec_env, train  # noqa: E402
+import rl.train as rl_train  # noqa: E402
+from rl.train import TrainingClock, build_vec_env, train  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
 import explain_game  # noqa: E402
@@ -92,6 +93,18 @@ def test_stage_environments_have_the_right_number_of_opponents():
 def test_snake_cnn_keeps_the_batch_and_gives_256_features():
     space = spaces.Box(0.0, 1.0, shape=(6, 11, 11))
     assert SnakeCNN(space)(torch.zeros(3, 6, 11, 11)).shape == (3, 256)
+
+
+def test_training_clock_skips_sleep_and_stops_at_the_budget(monkeypatch):
+    now = [0.0]
+    monkeypatch.setattr(rl_train.time, "perf_counter", lambda: now[0])
+    clock = TrainingClock(minutes=1)
+    clock._on_training_start()
+    for gap in (10, 20, 3 * 3600, 30):  # the 3-hour gap is the laptop sleeping
+        now[0] += gap
+        keep_going = clock._on_step()
+    assert clock.seconds == 60
+    assert keep_going is False
 
 
 def test_training_saves_a_model_and_a_summary(tiny_model):

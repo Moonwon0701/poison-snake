@@ -30,18 +30,31 @@ from rl.model import new_model
 RUNS = Path("runs")
 
 
-class StopAfter(BaseCallback):
-    """Ends training once `minutes` have passed, so a stage fits its time budget."""
+class TrainingClock(BaseCallback):
+    """Counts training time and, given `minutes`, ends training once they're used.
 
-    def __init__(self, minutes: float):
+    A gap of more than PAUSE seconds between two steps means training was
+    paused, e.g. the laptop went to sleep, and isn't counted. Wall-clock time
+    would count the sleep: a solo run that trained for 23 minutes recorded 3.4
+    hours, and after waking up it would stop at once.
+    """
+
+    PAUSE = 600
+
+    def __init__(self, minutes: float | None = None):
         super().__init__()
-        self.seconds = minutes * 60
+        self.budget = minutes * 60 if minutes else None
+        self.seconds = 0.0
 
     def _on_training_start(self) -> None:
-        self.start = time.perf_counter()
+        self.last = time.perf_counter()
 
     def _on_step(self) -> bool:
-        return time.perf_counter() - self.start < self.seconds
+        now = time.perf_counter()
+        gap, self.last = now - self.last, now
+        if gap < self.PAUSE:
+            self.seconds += gap
+        return self.budget is None or self.seconds < self.budget
 
 
 def build_vec_env(stage: str, n_envs: int, seed: int, subprocess: bool = True) -> VecEnv:
@@ -107,18 +120,17 @@ def train(
             verbose=0,
         ),
     ]
-    if max_minutes:
-        callbacks.append(StopAfter(max_minutes))
+    clock = TrainingClock(max_minutes)
+    callbacks.append(clock)
 
     steps_before = model.num_timesteps if start_from else 0
-    start = time.perf_counter()
     model.learn(
         total_timesteps=timesteps,
         callback=callbacks,
         tb_log_name=stage,
         reset_num_timesteps=start_from is None,
     )
-    elapsed = time.perf_counter() - start
+    elapsed = max(clock.seconds, 1e-9)
 
     model_path = run_dir / "model.zip"
     model.save(model_path)
