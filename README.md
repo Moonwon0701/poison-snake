@@ -1,7 +1,12 @@
+English | [한국어](README.ko.md)
+
 # poison-snake
 
 A [Battlesnake](https://play.battlesnake.com) agent, built as a learning
 project for behavior trees, pathfinding, and (later) RL environments.
+
+The Korean page is a shorter tour: what's here, how to run it, and the
+behavior-tree and RL ideas worth reusing in a hackathon.
 
 ## Layout
 
