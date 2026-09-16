@@ -191,6 +191,11 @@ obs, reward, terminated, truncated, info = env.step(0)  # 0 up, 1 down, 2 left, 
 - **Reward:** +0.01 per turn survived, +0.1 for eating, −1 for being
   eliminated (draws included), and +1 for outliving every opponent. Change
   any of these with `SnakeEnv(rewards={...})`.
+- **Territory reward (off by default):** `rewards={"territory": 0.02}` also
+  pays, every turn, that much times `territory_share(state)` — the fraction
+  of the free board our head reaches strictly before any other head (our
+  Voronoi area). It shrinks several turns before a snake is trapped, so it
+  rewards keeping space early. It costs two BFS passes, about 0.1 ms a step.
 - **`info["action_mask"]`:** 1 for moves that don't hit a wall or a body this turn.
 - **Episode end:** `terminated` when our snake is eliminated or wins,
   `truncated` after `max_turns` steps (default 1000).
@@ -226,6 +231,9 @@ python -m rl.train --stage solo      --timesteps 10000000 --max-minutes 25 --env
 python -m rl.train --stage duel_weak --from runs\solo\model.zip      --timesteps 10000000 --max-minutes 25
 python -m rl.train --stage four_weak --from runs\duel_weak\model.zip --timesteps 10000000 --max-minutes 25
 
+# Against the tuned trees, optionally paying for territory as well as survival
+python -m rl.train --stage four_default --from runs\four_weak\model.zip --max-minutes 25 --territory-reward 0.02
+
 # How often it wins, on seeds training never saw
 python -m rl.evaluate runs\four_weak\model.zip --stage four_weak --games 1000 --first-seed 100000
 
@@ -258,8 +266,14 @@ RTX 5070 Ti laptop (9.7M steps, roughly 2,000-2,700 steps per second):
 | solo | 3.8M | survives ~850 turns (our behavior tree: 690) |
 | duel_weak | 4.2M | wins 67.8% [63.0, 72.1] against one weak tree (even: 50%) |
 | four_weak | 1.7M | wins 59.7% [56.6, 62.7] against three weak trees (even: 25%) |
+| four_default | 2.4M | wins 7.6% [6.1, 9.4] against three default trees (even: 25%) |
 
-Against three *default* behavior trees the same model wins only 2.0%, so the
-tuned tree is still far ahead. The agent's own deaths are mostly
-self-collisions (63%), the same weakness the behavior tree had before its
-trap work.
+Numbers in brackets are 95% confidence intervals. The tuned behavior tree is
+still far ahead: before this last stage the same model won 2.0% against it,
+and 25 minutes of training took that to 7.6%, with games growing from 166 to
+209 turns.
+
+The agent dies the way the behavior tree used to. Against the default trees
+82% of its losses are being trapped (56% into its own body), while
+head-to-head collisions cause only 8%. That is what the territory reward
+above is meant to attack.
