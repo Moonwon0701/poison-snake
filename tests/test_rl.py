@@ -21,6 +21,7 @@ from gym_env import rules  # noqa: E402
 from gym_env.env import ACTIONS, action_mask, behavior_tree_policy, bt_policy  # noqa: E402
 from rl.agent import RLPolicy  # noqa: E402
 from rl.envs import make_env  # noqa: E402
+from rl.expand import expand  # noqa: E402
 from rl.evaluate import evaluate, report  # noqa: E402
 from rl.model import SnakeCNN  # noqa: E402
 import rl.train as rl_train  # noqa: E402
@@ -137,6 +138,25 @@ def test_replay_with_an_rl_snake_explains_it_by_probabilities(tiny_model):
         assert "trace" not in decision
     bt_turns = [frame["decisions"]["snake2"] for frame in replay["turns"] if "snake2" in frame["decisions"]]
     assert all("trace" in decision for decision in bt_turns)
+
+
+def test_expanding_a_model_keeps_the_moves_it_would_have_made(tiny_model, tmp_path):
+    expanded = expand(tiny_model, tmp_path / "expanded.zip")
+    before, after = RLPolicy(tiny_model), RLPolicy(expanded)
+    assert before.spatial is False and after.spatial is True
+
+    rng = random.Random(7)
+    state = rules.new_game(["me", "other"], rng)
+    for _ in range(25):  # a few positions, not just the opening
+        game_state = rules.to_api_json(state, "me")
+        old_move = before.explain(game_state)
+        new_move = after.explain(game_state)
+        assert new_move["move"] == old_move["move"]
+        assert new_move["policy"] == pytest.approx(old_move["policy"], abs=1e-4)
+        moves = {s.id: rules.non_colliding_moves(state, s.id)[0] for s in state.snakes}
+        state, eliminated = rules.step(state, moves, rng)
+        if eliminated:
+            break
 
 
 def test_evaluate_plays_exactly_the_requested_games(tiny_model):

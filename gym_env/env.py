@@ -28,6 +28,13 @@ ACTIONS = list(MOVES)  # action index -> move: 0 up, 1 down, 2 left, 3 right
 MY_HEAD, MY_BODY, ENEMY_HEADS, ENEMY_BODIES, FOOD, MY_HEALTH = range(6)
 CHANNELS = 6
 
+# Three more channels, added by encode_observation(spatial=True). They hand
+# the network the space arithmetic it would otherwise have to learn: a 3x3
+# convolution spreads information one cell per layer, so working out what a
+# whole 11x11 board is reachable would take about ten layers.
+MY_REACH, RIVAL_REACH, OWNER = range(6, 9)
+SPACE_CHANNELS = 3
+
 DEFAULT_REWARDS = {
     "survive": 0.01,  # each turn our snake is still alive
     "eat": 0.1,  # on a turn we ate
@@ -55,8 +62,12 @@ def bt_policy(options: Options = DEFAULT_OPTIONS) -> Policy:
     return policy
 
 
-def encode_observation(state: rules.GameState, agent_id: str = AGENT) -> np.ndarray:
+def encode_observation(
+    state: rules.GameState, agent_id: str = AGENT, spatial: bool = False
+) -> np.ndarray:
     """The board as a (6, height, width) float32 array, indexed [channel, y, x].
+
+    With `spatial`, three more channels come along; see add_space_channels.
 
     y grows upward like on the Battlesnake board, so row 0 is the bottom.
 
@@ -65,7 +76,8 @@ def encode_observation(state: rules.GameState, agent_id: str = AGENT) -> np.ndar
     at the neck, small at the tail. A doubled tail cell keeps the larger
     value, since it stays one turn longer.
     """
-    obs = np.zeros((CHANNELS, state.height, state.width), dtype=np.float32)
+    channels = CHANNELS + (SPACE_CHANNELS if spatial else 0)
+    obs = np.zeros((channels, state.height, state.width), dtype=np.float32)
     me = state.snake(agent_id)
     my_length = len(me.body) if me else 0
     for snake in state.snakes:
@@ -84,7 +96,55 @@ def encode_observation(state: rules.GameState, agent_id: str = AGENT) -> np.ndar
         obs[FOOD, y, x] = 1.0
     if me:
         obs[MY_HEALTH] = me.health / rules.MAX_HEALTH
+    if spatial:
+        add_space_channels(obs, state, agent_id)
     return obs
+
+
+def reach_maps(
+    state: rules.GameState, agent_id: str = AGENT
+) -> tuple[dict, dict, set]:
+    """How many moves we and the nearest enemy need to reach each cell.
+
+    Both sides start from the cells their head can move into, so the two
+    distances are comparable: whoever's is smaller gets there first. Bodies
+    count where they'll be after this turn, tails excluded.
+    """
+    me = state.snake(agent_id)
+    blocked = {p for s in state.snakes for p in s.body[:-1]}
+    size = (state.width, state.height)
+    mine = distance_map(neighbors(me.head, *size), blocked, *size) if me else {}
+    rival_starts = [
+        cell
+        for snake in state.snakes
+        if snake.id != agent_id
+        for cell in neighbors(snake.head, *size)
+    ]
+    return mine, distance_map(rival_starts, blocked, *size), blocked
+
+
+def add_space_channels(
+    obs: np.ndarray, state: rules.GameState, agent_id: str = AGENT
+) -> None:
+    """Fill in the three space channels, in place.
+
+    - MY_REACH, RIVAL_REACH: 1 right next to the head, fading to 0 with
+      distance, and exactly 0 where that snake can't get at all.
+    - OWNER: 1 for cells we reach first, 0.5 for a tie (a head-to-head),
+      0 for cells an enemy reaches first or nobody reaches.
+    """
+    mine, rivals, _ = reach_maps(state, agent_id)
+    far = state.width + state.height
+    for cell, d in mine.items():
+        obs[MY_REACH, cell[1], cell[0]] = max(0.0, 1.0 - d / far)
+    for cell, d in rivals.items():
+        obs[RIVAL_REACH, cell[1], cell[0]] = max(0.0, 1.0 - d / far)
+    for cell, d in mine.items():
+        rival = rivals.get(cell)
+        if rival is None or d < rival:
+            obs[OWNER, cell[1], cell[0]] = 1.0
+        elif d == rival:
+            obs[OWNER, cell[1], cell[0]] = 0.5
 
 
 def territory_share(state: rules.GameState, agent_id: str = AGENT) -> float:
@@ -98,19 +158,9 @@ def territory_share(state: rules.GameState, agent_id: str = AGENT) -> float:
     It warns of being trapped several turns ahead, which plain flood fill
     doesn't: as an enemy closes in, this share shrinks first.
     """
-    me = state.snake(agent_id)
-    if me is None:
+    if state.snake(agent_id) is None:
         return 0.0
-    blocked = {p for s in state.snakes for p in s.body[:-1]}
-    size = (state.width, state.height)
-    mine = distance_map(neighbors(me.head, *size), blocked, *size)
-    rival_starts = [
-        cell
-        for snake in state.snakes
-        if snake.id != agent_id
-        for cell in neighbors(snake.head, *size)
-    ]
-    rivals = distance_map(rival_starts, blocked, *size)
+    mine, rivals, blocked = reach_maps(state, agent_id)
     owned = sum(1 for cell, d in mine.items() if cell not in rivals or d < rivals[cell])
     free = state.width * state.height - len(blocked)
     return owned / free if free else 0.0
@@ -142,8 +192,9 @@ class SnakeEnv(gym.Env):
     """Battlesnake from one snake's point of view.
 
     - Actions: Discrete(4), see ACTIONS.
-    - Observations: see encode_observation. info["action_mask"] marks the
-      actions that don't hit a wall or a body.
+    - Observations: see encode_observation; `spatial` adds the three space
+      channels. info["action_mask"] marks the actions that don't hit a wall
+      or a body.
     - Rewards: DEFAULT_REWARDS, overridable per key through `rewards`, e.g.
       rewards={"territory": 0.02} pays for holding space as well as surviving.
     - terminated: our snake was eliminated, or it outlived every opponent.
@@ -164,6 +215,7 @@ class SnakeEnv(gym.Env):
         food_spawn_chance: int = 15,
         minimum_food: int = 1,
         render_mode: str | None = None,
+        spatial: bool = False,
     ):
         if not 0 <= opponents <= 3:
             raise ValueError("opponents must be between 0 and 3")
@@ -175,8 +227,10 @@ class SnakeEnv(gym.Env):
         self.food_spawn_chance = food_spawn_chance
         self.minimum_food = minimum_food
         self.render_mode = render_mode
+        self.spatial = spatial
+        channels = CHANNELS + (SPACE_CHANNELS if spatial else 0)
         self.observation_space = spaces.Box(
-            0.0, 1.0, shape=(CHANNELS, size, size), dtype=np.float32
+            0.0, 1.0, shape=(channels, size, size), dtype=np.float32
         )
         self.action_space = spaces.Discrete(len(ACTIONS))
         self.state: rules.GameState | None = None
@@ -195,7 +249,7 @@ class SnakeEnv(gym.Env):
             self.state = rules.new_game(ids, self.rng, self.size, self.size)
         self._had_opponents = len(self.state.snakes) > 1
         self._steps = 0
-        return encode_observation(self.state), self._info()
+        return self._observation(), self._info()
 
     def step(self, action):
         if self.state is None or self.state.snake(AGENT) is None:
@@ -229,12 +283,15 @@ class SnakeEnv(gym.Env):
         info["won"] = won
         if AGENT in eliminated:
             info["cause"] = eliminated[AGENT]
-        return encode_observation(self.state), float(reward), terminated, truncated, info
+        return self._observation(), float(reward), terminated, truncated, info
 
     def render(self):
         if self.render_mode == "ansi":
             return render_text(self.state)
         return None
+
+    def _observation(self) -> np.ndarray:
+        return encode_observation(self.state, spatial=self.spatial)
 
     def _info(self) -> dict:
         return {"turn": self.state.turn, "action_mask": action_mask(self.state)}

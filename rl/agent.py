@@ -13,7 +13,7 @@ import torch
 from sb3_contrib import MaskablePPO
 
 from gym_env import rules
-from gym_env.env import ACTIONS, action_mask, encode_observation
+from gym_env.env import ACTIONS, CHANNELS, action_mask, encode_observation
 
 
 class RLPolicy:
@@ -21,6 +21,8 @@ class RLPolicy:
         # One board at a time is faster on the CPU than a round trip to the GPU.
         self.model = MaskablePPO.load(model_path, device=device)
         self.name = Path(model_path).as_posix()
+        # A model trained with the space channels expects them at every step.
+        self.spatial = self.model.observation_space.shape[0] > CHANNELS
 
     def __call__(self, game_state: dict, rng: random.Random | None = None) -> str:
         return self.explain(game_state)["move"]
@@ -36,7 +38,7 @@ class RLPolicy:
         mask = action_mask(state, you).astype(bool)
         if not mask.any():  # every move is fatal; see rl.envs.MaskedSnakeEnv
             mask[:] = True
-        obs = encode_observation(state, you)
+        obs = encode_observation(state, you, spatial=self.spatial)
 
         policy = self.model.policy
         obs_tensor, _ = policy.obs_to_tensor(obs)

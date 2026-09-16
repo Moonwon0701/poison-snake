@@ -24,6 +24,7 @@ import numpy as np
 from sb3_contrib import MaskablePPO
 
 from gym_env import rules
+from gym_env.env import CHANNELS
 from rl.envs import STAGES
 from rl.train import build_vec_env
 
@@ -45,7 +46,10 @@ def evaluate(
     model = MaskablePPO.load(model_path, device=device)
     n_envs = min(n_envs, games)
     quota = [games // n_envs + (1 if i < games % n_envs else 0) for i in range(n_envs)]
-    vec_env = build_vec_env(stage, n_envs, first_seed, subprocess)
+    # Match the observation the model was trained on, with or without the
+    # space channels. Reward weights don't matter here; we count wins.
+    spatial = model.observation_space.shape[0] > CHANNELS
+    vec_env = build_vec_env(stage, n_envs, first_seed, subprocess, spatial=spatial)
     results: list[dict] = []
     finished = [0] * n_envs
     start = time.perf_counter()

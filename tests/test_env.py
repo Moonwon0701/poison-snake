@@ -14,6 +14,9 @@ from gym_env.env import (
     MY_BODY,
     MY_HEAD,
     MY_HEALTH,
+    MY_REACH,
+    OWNER,
+    RIVAL_REACH,
     SnakeEnv,
     action_mask,
     encode_observation,
@@ -194,6 +197,27 @@ def test_the_territory_reward_pays_for_holding_space():
     share = territory_share(env.state)
     assert reward == pytest.approx(0.01 + share)
     assert 0 < share < 1
+
+
+def test_space_channels_mark_who_reaches_each_cell_first():
+    state = board({AGENT: [(1, 5), (0, 5), (0, 4)], "o": [(9, 5), (10, 5), (10, 4)]})
+    obs = encode_observation(state, spatial=True)
+    assert obs.shape == (9, 11, 11)
+
+    near_me, near_them = (2, 5), (8, 5)
+    assert obs[OWNER][near_me[1]][near_me[0]] == 1.0
+    assert obs[OWNER][near_them[1]][near_them[0]] == 0.0
+    assert obs[MY_REACH][near_me[1]][near_me[0]] > obs[MY_REACH][near_them[1]][near_them[0]]
+    assert obs[RIVAL_REACH][near_them[1]][near_them[0]] > obs[RIVAL_REACH][near_me[1]][near_me[0]]
+    # The middle column is the same distance from both, so it's a tie.
+    assert obs[OWNER][5][5] == 0.5
+
+
+def test_space_channels_are_off_by_default():
+    state = board({AGENT: [(5, 5), (5, 4), (5, 3)]})
+    assert encode_observation(state).shape == (6, 11, 11)
+    assert SnakeEnv(spatial=True).observation_space.shape == (9, 11, 11)
+    assert SnakeEnv().observation_space.shape == (6, 11, 11)
 
 
 def test_stepping_after_the_episode_ended_is_an_error():

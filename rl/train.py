@@ -63,6 +63,7 @@ def build_vec_env(
     seed: int,
     subprocess: bool = True,
     rewards: dict[str, float] | None = None,
+    spatial: bool = False,
 ) -> VecEnv:
     """n_envs copies of the stage's environment, each in its own process if `subprocess`.
 
@@ -70,7 +71,7 @@ def build_vec_env(
     most of the work, so spreading environments over CPU cores is what
     makes training fast.
     """
-    env_fns = [lambda: make_env(stage, rewards=rewards) for _ in range(n_envs)]
+    env_fns = [lambda: make_env(stage, rewards=rewards, spatial=spatial) for _ in range(n_envs)]
     if subprocess and n_envs > 1:
         vec_env: VecEnv = SubprocVecEnv(env_fns, start_method="spawn")
     else:
@@ -94,6 +95,7 @@ def train(
     threads: int | None = None,
     max_minutes: float | None = None,
     territory_reward: float = 0.0,
+    spatial: bool = False,
 ) -> Path:
     """Train for `timesteps` moves on `stage`. Returns the saved model's path.
 
@@ -107,9 +109,11 @@ def train(
     # Paying for territory teaches the snake to keep space, which is what it
     # dies for: 82% of its losses to the default trees were being trapped.
     rewards = {"territory": territory_reward} if territory_reward else None
-    env = build_vec_env(stage, n_envs, seed, subprocess, rewards)
+    env = build_vec_env(stage, n_envs, seed, subprocess, rewards, spatial)
     # Evaluation games use seeds far from the training ones.
-    eval_env = build_vec_env(stage, min(n_envs, 8), seed + 1_000_000, subprocess, rewards)
+    eval_env = build_vec_env(
+        stage, min(n_envs, 8), seed + 1_000_000, subprocess, rewards, spatial
+    )
     tensorboard_log = str(run_dir / "tb")
 
     if start_from:
@@ -157,6 +161,7 @@ def train(
         "device": str(model.device),
         "torch_threads": torch.get_num_threads(),
         "territory_reward": territory_reward,
+        "spatial": spatial,
         "seed": seed,
         "seconds": round(elapsed, 1),
         "steps_per_second": round(trained / elapsed),
@@ -187,6 +192,11 @@ def main() -> None:
         default=0.0,
         help="per turn, times our share of the board reached before any enemy",
     )
+    parser.add_argument(
+        "--spatial",
+        action="store_true",
+        help="add the three space channels (needs a model with 9 input channels, see rl.expand)",
+    )
     args = parser.parse_args()
     train(
         args.stage,
@@ -201,6 +211,7 @@ def main() -> None:
         threads=args.threads,
         max_minutes=args.max_minutes,
         territory_reward=args.territory_reward,
+        spatial=args.spatial,
     )
 
 

@@ -90,11 +90,13 @@ def make_env(
     max_turns: int = 1000,
     monitor: bool = True,
     rewards: dict[str, float] | None = None,
+    spatial: bool = False,
 ) -> gym.Env:
     """A fresh environment for `stage` (a key of STAGES).
 
     `rewards` overrides single reward weights, e.g. {"territory": 0.02} to
-    pay for holding space; see gym_env.env.DEFAULT_REWARDS.
+    pay for holding space; see gym_env.env.DEFAULT_REWARDS. `spatial` adds
+    the three space channels to the observation.
     """
     spec = STAGES[stage]
     env: gym.Env = SnakeEnv(
@@ -102,6 +104,7 @@ def make_env(
         opponent_policy=bt_policy(spec.opponent_options),
         max_turns=max_turns,
         rewards=rewards,
+        spatial=spatial,
     )
     if monitor:  # records episode length and reward for training logs
         env = Monitor(env)
