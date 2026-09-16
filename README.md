@@ -208,3 +208,58 @@ python tools\sim_benchmark.py 100                           # our snake inside t
 The rules follow the official engine's order, but use Python's random
 numbers. Food placement therefore differs from a CLI game with the same
 seed. Hazards and non-standard game modes aren't included.
+
+## Reinforcement learning (rl/)
+
+`rl/` trains a snake from scratch with
+[MaskablePPO](https://sb3-contrib.readthedocs.io/) on the Gymnasium
+environment above, against opponents that get harder stage by stage. The
+extras it needs are separate from the server's:
+
+```powershell
+pip install -r requirements-rl.txt   # torch (CUDA 12.8), stable-baselines3, sb3-contrib
+```
+
+```powershell
+# One stage at a time, each continuing from the last
+python -m rl.train --stage solo      --timesteps 10000000 --max-minutes 25 --envs 24 --device cuda --threads 4
+python -m rl.train --stage duel_weak --from runs\solo\model.zip      --timesteps 10000000 --max-minutes 25
+python -m rl.train --stage four_weak --from runs\duel_weak\model.zip --timesteps 10000000 --max-minutes 25
+
+# How often it wins, on seeds training never saw
+python -m rl.evaluate runs\four_weak\model.zip --stage four_weak --games 1000 --first-seed 100000
+
+# Watch it play, with its move probabilities (see the replay viewer above)
+python tools\explain_game.py --simulate --agent runs\four_weak\model.zip --opponents 3 --opponent-options none -o replay.html
+
+tensorboard --logdir runs
+```
+
+- **Stages** (`rl/envs.py`): `solo` alone, `duel_weak` against one behavior
+  tree with every option off, `four_weak` against three of them, and
+  `four_default` against three of today's default trees.
+- **Network** (`rl/model.py`): three padded 3x3 convolutions (6→32→64→64)
+  keep all 11x11 cells, then a 7,744→256 layer sees the whole board, then
+  separate move and value heads. 2.2M parameters.
+- **Action masks**: moves that hit a wall or a body get zero probability, so
+  the agent never has to learn that they kill. `MaskCachingVecEnv` answers
+  those masks from the step infos; asking each worker process separately
+  roughly halved training speed on Windows.
+- **`--max-minutes`** stops a stage on time. It counts only time spent
+  training, so a laptop that sleeps mid-run doesn't burn the budget.
+- Training lives in the `runs/` folder (gitignored): `model.zip`,
+  `best/`, `checkpoints/` every 250k steps, `eval/`, and TensorBoard logs.
+
+Results of the first curriculum, about 63 minutes of training in total on an
+RTX 5070 Ti laptop (9.7M steps, roughly 2,000-2,700 steps per second):
+
+| Stage | Steps | Result on fresh seeds |
+|---|---|---|
+| solo | 3.8M | survives ~850 turns (our behavior tree: 690) |
+| duel_weak | 4.2M | wins 67.8% [63.0, 72.1] against one weak tree (even: 50%) |
+| four_weak | 1.7M | wins 59.7% [56.6, 62.7] against three weak trees (even: 25%) |
+
+Against three *default* behavior trees the same model wins only 2.0%, so the
+tuned tree is still far ahead. The agent's own deaths are mostly
+self-collisions (63%), the same weakness the behavior tree had before its
+trap work.
