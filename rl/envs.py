@@ -85,13 +85,23 @@ class MaskCachingVecEnv(VecEnvWrapper):
         return self.venv.env_method(method_name, *method_args, indices=indices, **method_kwargs)
 
 
-def make_env(stage: str, max_turns: int = 1000, monitor: bool = True) -> gym.Env:
-    """A fresh environment for `stage` (a key of STAGES)."""
+def make_env(
+    stage: str,
+    max_turns: int = 1000,
+    monitor: bool = True,
+    rewards: dict[str, float] | None = None,
+) -> gym.Env:
+    """A fresh environment for `stage` (a key of STAGES).
+
+    `rewards` overrides single reward weights, e.g. {"territory": 0.02} to
+    pay for holding space; see gym_env.env.DEFAULT_REWARDS.
+    """
     spec = STAGES[stage]
     env: gym.Env = SnakeEnv(
         opponents=spec.opponents,
         opponent_policy=bt_policy(spec.opponent_options),
         max_turns=max_turns,
+        rewards=rewards,
     )
     if monitor:  # records episode length and reward for training logs
         env = Monitor(env)

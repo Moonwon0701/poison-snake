@@ -16,6 +16,7 @@ import gymnasium as gym
 import numpy as np
 from gymnasium import spaces
 
+from agent.pathfind import distance_map, neighbors
 from agent.strategy import DEFAULT_OPTIONS, Options, decide
 from agent.world import MOVES, World
 from gym_env import rules
@@ -32,6 +33,7 @@ DEFAULT_REWARDS = {
     "eat": 0.1,  # on a turn we ate
     "death": -1.0,  # we were eliminated; a draw counts as this too
     "win": 1.0,  # the last opponent went out and we didn't
+    "territory": 0.0,  # times our share of the board, see territory_share
 }
 
 # An opponent policy gets the engine-style game state (as that snake sees it)
@@ -85,6 +87,35 @@ def encode_observation(state: rules.GameState, agent_id: str = AGENT) -> np.ndar
     return obs
 
 
+def territory_share(state: rules.GameState, agent_id: str = AGENT) -> float:
+    """Share of the free board we reach strictly before any other snake (0 to 1).
+
+    This is our Voronoi area, the same measure the behavior tree uses to pick
+    moves. Cells an enemy reaches on the same turn don't count, because
+    arriving together is a head-to-head. Both sides start from the cells their
+    head can move into, so the two distances are comparable.
+
+    It warns of being trapped several turns ahead, which plain flood fill
+    doesn't: as an enemy closes in, this share shrinks first.
+    """
+    me = state.snake(agent_id)
+    if me is None:
+        return 0.0
+    blocked = {p for s in state.snakes for p in s.body[:-1]}
+    size = (state.width, state.height)
+    mine = distance_map(neighbors(me.head, *size), blocked, *size)
+    rival_starts = [
+        cell
+        for snake in state.snakes
+        if snake.id != agent_id
+        for cell in neighbors(snake.head, *size)
+    ]
+    rivals = distance_map(rival_starts, blocked, *size)
+    owned = sum(1 for cell, d in mine.items() if cell not in rivals or d < rivals[cell])
+    free = state.width * state.height - len(blocked)
+    return owned / free if free else 0.0
+
+
 def action_mask(state: rules.GameState, agent_id: str = AGENT) -> np.ndarray:
     """1 for each action that doesn't hit a wall or a body this turn."""
     allowed = rules.non_colliding_moves(state, agent_id)
@@ -113,7 +144,8 @@ class SnakeEnv(gym.Env):
     - Actions: Discrete(4), see ACTIONS.
     - Observations: see encode_observation. info["action_mask"] marks the
       actions that don't hit a wall or a body.
-    - Rewards: DEFAULT_REWARDS, overridable per key through `rewards`.
+    - Rewards: DEFAULT_REWARDS, overridable per key through `rewards`, e.g.
+      rewards={"territory": 0.02} pays for holding space as well as surviving.
     - terminated: our snake was eliminated, or it outlived every opponent.
       truncated: `max_turns` steps since reset.
     - reset(options={"state": GameState}) starts from any position that has a
@@ -186,6 +218,8 @@ class SnakeEnv(gym.Env):
             reward = self.rewards["survive"]
             if me.health == rules.MAX_HEALTH:  # only eating resets health
                 reward += self.rewards["eat"]
+            if self.rewards["territory"]:  # skip the two BFS passes when it's off
+                reward += self.rewards["territory"] * territory_share(self.state)
             if won:
                 reward += self.rewards["win"]
 

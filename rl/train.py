@@ -57,14 +57,20 @@ class TrainingClock(BaseCallback):
         return self.budget is None or self.seconds < self.budget
 
 
-def build_vec_env(stage: str, n_envs: int, seed: int, subprocess: bool = True) -> VecEnv:
+def build_vec_env(
+    stage: str,
+    n_envs: int,
+    seed: int,
+    subprocess: bool = True,
+    rewards: dict[str, float] | None = None,
+) -> VecEnv:
     """n_envs copies of the stage's environment, each in its own process if `subprocess`.
 
     Every step waits for the behavior-tree opponents to decide, and that's
     most of the work, so spreading environments over CPU cores is what
     makes training fast.
     """
-    env_fns = [lambda: make_env(stage) for _ in range(n_envs)]
+    env_fns = [lambda: make_env(stage, rewards=rewards) for _ in range(n_envs)]
     if subprocess and n_envs > 1:
         vec_env: VecEnv = SubprocVecEnv(env_fns, start_method="spawn")
     else:
@@ -87,6 +93,7 @@ def train(
     runs_dir: Path = RUNS,
     threads: int | None = None,
     max_minutes: float | None = None,
+    territory_reward: float = 0.0,
 ) -> Path:
     """Train for `timesteps` moves on `stage`. Returns the saved model's path.
 
@@ -97,9 +104,12 @@ def train(
         torch.set_num_threads(threads)
     run_dir = Path(runs_dir) / (run_name or stage)
     run_dir.mkdir(parents=True, exist_ok=True)
-    env = build_vec_env(stage, n_envs, seed, subprocess)
+    # Paying for territory teaches the snake to keep space, which is what it
+    # dies for: 82% of its losses to the default trees were being trapped.
+    rewards = {"territory": territory_reward} if territory_reward else None
+    env = build_vec_env(stage, n_envs, seed, subprocess, rewards)
     # Evaluation games use seeds far from the training ones.
-    eval_env = build_vec_env(stage, min(n_envs, 8), seed + 1_000_000, subprocess)
+    eval_env = build_vec_env(stage, min(n_envs, 8), seed + 1_000_000, subprocess, rewards)
     tensorboard_log = str(run_dir / "tb")
 
     if start_from:
@@ -146,6 +156,7 @@ def train(
         "n_envs": n_envs,
         "device": str(model.device),
         "torch_threads": torch.get_num_threads(),
+        "territory_reward": territory_reward,
         "seed": seed,
         "seconds": round(elapsed, 1),
         "steps_per_second": round(trained / elapsed),
@@ -170,6 +181,12 @@ def main() -> None:
     parser.add_argument("--eval-games", type=int, default=50)
     parser.add_argument("--threads", type=int, help="PyTorch CPU threads (default: all cores)")
     parser.add_argument("--max-minutes", type=float, help="stop and save after this long")
+    parser.add_argument(
+        "--territory-reward",
+        type=float,
+        default=0.0,
+        help="per turn, times our share of the board reached before any enemy",
+    )
     args = parser.parse_args()
     train(
         args.stage,
@@ -183,6 +200,7 @@ def main() -> None:
         eval_games=args.eval_games,
         threads=args.threads,
         max_minutes=args.max_minutes,
+        territory_reward=args.territory_reward,
     )
 
 

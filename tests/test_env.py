@@ -17,6 +17,7 @@ from gym_env.env import (
     SnakeEnv,
     action_mask,
     encode_observation,
+    territory_share,
 )
 
 
@@ -168,6 +169,31 @@ def test_reward_weights_can_be_changed():
     _, reward, _, _, _ = env.step(ACTIONS.index("up"))
     assert reward == 0.5
     assert env.rewards["death"] == -1.0  # other weights keep their defaults
+
+
+def test_territory_is_the_whole_board_when_we_are_alone():
+    state = board({AGENT: [(5, 5), (5, 4), (5, 3)]})
+    assert territory_share(state) == 1.0
+
+
+def test_territory_splits_between_two_snakes_and_favours_the_freer_side():
+    # Both snakes lie on row 5; ours on the left, theirs on the right.
+    even = board({AGENT: [(2, 5), (1, 5), (0, 5)], "o": [(8, 5), (9, 5), (10, 5)]})
+    assert 0.3 < territory_share(even) < 0.7
+
+    # Now ours sits in the far corner, so the enemy reaches most cells first.
+    cornered = board({AGENT: [(0, 0), (1, 0), (2, 0)], "o": [(5, 5), (5, 6), (5, 7)]})
+    assert territory_share(cornered) < territory_share(even)
+
+
+def test_the_territory_reward_pays_for_holding_space():
+    state = board({AGENT: [(5, 5), (5, 4), (5, 3)], "o": [(9, 9), (9, 10), (8, 10)]})
+    env = SnakeEnv(opponents=1, rewards={"territory": 1.0}, opponent_policy=always("down"))
+    env.reset(seed=0, options={"state": state})
+    _, reward, _, _, _ = env.step(ACTIONS.index("up"))
+    share = territory_share(env.state)
+    assert reward == pytest.approx(0.01 + share)
+    assert 0 < share < 1
 
 
 def test_stepping_after_the_episode_ended_is_an_error():
