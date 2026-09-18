@@ -1,0 +1,30 @@
+# Fly.io deployment. Create the app once with `fly launch --no-deploy`, which
+# rewrites app = below, then `fly deploy`.
+#
+# The game engine calls us every turn and gives up after about 500 ms, so the
+# machine must never be asleep when a game starts: min_machines_running = 1
+# keeps one alive. A snake decides in under a millisecond; the rest of the
+# budget is network travel, which is why the region is in the US, near the
+# game servers.
+
+app = "poison-snake"
+primary_region = "sjc"
+
+[build]
+
+[env]
+  HOST = "0.0.0.0"
+  PORT = "8000"
+  SNAKE_BRAIN = "rl"
+  SNAKE_MODEL = "models/snake.npz"
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

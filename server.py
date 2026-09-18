@@ -2,6 +2,13 @@
 
 Deliberately thin: read the JSON the game engine sends, hand it to the
 agent, send back JSON. No strategy lives here.
+
+Environment variables:
+    SNAKE_BRAIN   "bt" (default) for the behavior tree, "rl" for a trained network
+    SNAKE_MODEL   weights for the "rl" brain (default models/snake.npz)
+    SNAKE_AUTHOR  your Battlesnake username, shown on the profile
+    SNAKE_COLOR   the snake's color
+    HOST, PORT    where to listen (0.0.0.0 and the platform's PORT when deployed)
 """
 
 import logging
@@ -18,6 +25,30 @@ log = logging.getLogger("snake")
 
 app = Flask(__name__)
 
+# SNAKE_BRAIN=rl plays with a trained network instead of the behavior tree.
+# The weights are a .npz from rl/export.py, and numpy runs them, so a
+# deployment needs no PyTorch. Still no strategy in this file: both brains
+# take the game state and hand back a move.
+BRAIN = os.environ.get("SNAKE_BRAIN", "bt")
+MODEL = os.environ.get("SNAKE_MODEL", "models/snake.npz")
+_network = None
+
+
+def network():
+    global _network
+    if _network is None:
+        from rl.numpy_agent import NumpyPolicy
+
+        _network = NumpyPolicy(MODEL)
+        log.info("brain: %s", _network.name)
+    return _network
+
+
+if BRAIN == "rl":  # fail at startup, not on the first move of a real game
+    network()
+elif BRAIN != "bt":
+    raise SystemExit(f'SNAKE_BRAIN must be "bt" or "rl", not "{BRAIN}"')
+
 
 @app.get("/")
 def info():
@@ -25,8 +56,8 @@ def info():
     return jsonify(
         {
             "apiversion": "1",
-            "author": "",
-            "color": "#7b2cbf",
+            "author": os.environ.get("SNAKE_AUTHOR", ""),
+            "color": os.environ.get("SNAKE_COLOR", "#7b2cbf"),
             "head": "default",
             "tail": "default",
             "version": "0.1.0",
@@ -44,9 +75,14 @@ def start():
 @app.post("/move")
 def move():
     game_state = request.get_json()
-    chosen, trace = decide_with_trace(World.from_json(game_state))
-    # trace[0] is always the root node, so leave it out of the log.
-    log.info("TURN %s -> %s [%s]", game_state["turn"], chosen, " > ".join(trace[1:]))
+    if BRAIN == "rl":
+        decision = network().explain(game_state)
+        chosen = decision["move"]
+        why = " ".join(f"{m} {p:.0%}" for m, p in decision["policy"].items() if p)
+    else:
+        chosen, trace = decide_with_trace(World.from_json(game_state))
+        why = " > ".join(trace[1:])  # trace[0] is the root node
+    log.info("TURN %s -> %s [%s]", game_state["turn"], chosen, why)
     return jsonify({"move": chosen})
 
 

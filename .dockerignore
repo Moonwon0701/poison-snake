@@ -1,0 +1,12 @@
+.venv/
+runs/
+tests/
+tools/
+viewer/
+__pycache__/
+**/__pycache__/
+.pytest_cache/
+.git/
+battlesnake.exe
+*.jsonl
+*.html
