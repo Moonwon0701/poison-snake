@@ -108,4 +108,30 @@ def test_exported_weights_carry_the_board_shape(brains):
     _, numpy_brain = brains
     assert numpy_brain.channels == 9
     assert numpy_brain.spatial is True
+    assert numpy_brain.shape == (9, 11, 11)
     assert np.array_equal(numpy_brain.w["shape"], [9, 11, 11])
+
+
+def test_the_behavior_tree_takes_over_on_boards_the_network_never_saw(brains, monkeypatch):
+    _, numpy_brain = brains
+    monkeypatch.setenv("SNAKE_BRAIN", "rl")
+    monkeypatch.setenv("SNAKE_MODEL", numpy_brain.name)
+    import server
+
+    try:
+        rl_server = importlib.reload(server)
+        standard = make_state([(5, 5), (5, 4), (5, 3)])
+        assert rl_server.network_can_play(standard)
+
+        bigger = make_state([(5, 5), (5, 4), (5, 3)])
+        bigger["board"]["width"] = bigger["board"]["height"] = 19
+        assert not rl_server.network_can_play(bigger)
+        assert rl_server.app.test_client().post("/move", json=bigger).get_json()["move"] in MOVES
+
+        hazardous = make_state([(5, 5), (5, 4), (5, 3)])
+        hazardous["board"]["hazards"] = [{"x": 0, "y": 0}]
+        assert not rl_server.network_can_play(hazardous)
+        assert rl_server.app.test_client().post("/move", json=hazardous).get_json()["move"] in MOVES
+    finally:
+        monkeypatch.undo()
+        importlib.reload(server)

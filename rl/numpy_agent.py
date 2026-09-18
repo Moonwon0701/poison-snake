@@ -52,7 +52,10 @@ class NumpyPolicy:
     def __init__(self, weights_path: str | Path):
         self.name = Path(weights_path).as_posix()
         self.w = {k: v for k, v in np.load(weights_path).items()}
-        self.channels = int(self.w["shape"][0])
+        # The board this was trained on: the first layer's weights fix the
+        # channels, and the 7744-wide layer fixes the height and width.
+        self.shape = tuple(int(n) for n in self.w["shape"])
+        self.channels = self.shape[0]
         self.spatial = self.channels > CHANNELS
 
     def __call__(self, game_state: dict, rng: random.Random | None = None) -> str:

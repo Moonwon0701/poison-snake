@@ -74,10 +74,23 @@ def start():
     return "ok"
 
 
+def network_can_play(game_state: dict) -> bool:
+    """Whether the trained network is a safe choice for this board.
+
+    It learned on one board size and has never seen a hazard, because our
+    rules don't have them. The behavior tree works on any board and at least
+    avoids walls and bodies, so it takes over on anything unfamiliar rather
+    than letting the network guess.
+    """
+    board = game_state["board"]
+    channels, height, width = network().shape
+    return (board["height"], board["width"]) == (height, width) and not board.get("hazards")
+
+
 @app.post("/move")
 def move():
     game_state = request.get_json()
-    if BRAIN == "rl":
+    if BRAIN == "rl" and network_can_play(game_state):
         decision = network().explain(game_state)
         chosen = decision["move"]
         why = " ".join(f"{m} {p:.0%}" for m, p in decision["policy"].items() if p)
