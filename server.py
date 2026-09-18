@@ -7,7 +7,9 @@ Environment variables:
     SNAKE_BRAIN   "bt" (default) for the behavior tree, "rl" for a trained network
     SNAKE_MODEL   weights for the "rl" brain (default models/snake.npz)
     SNAKE_AUTHOR  your Battlesnake username, shown on the profile
-    SNAKE_COLOR   the snake's color
+    SNAKE_COLOR   the snake's color, e.g. "#7b2cbf"
+    SNAKE_HEAD    head style from https://play.battlesnake.com/customizations
+    SNAKE_TAIL    tail style, likewise
     HOST, PORT    where to listen (0.0.0.0 and the platform's PORT when deployed)
 """
 
@@ -58,8 +60,8 @@ def info():
             "apiversion": "1",
             "author": os.environ.get("SNAKE_AUTHOR", ""),
             "color": os.environ.get("SNAKE_COLOR", "#7b2cbf"),
-            "head": "default",
-            "tail": "default",
+            "head": os.environ.get("SNAKE_HEAD", "default"),
+            "tail": os.environ.get("SNAKE_TAIL", "default"),
             "version": "0.1.0",
         }
     )
