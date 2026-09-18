@@ -14,6 +14,7 @@ from stable_baselines3.common.vec_env import VecEnv, VecEnvWrapper
 
 from agent.strategy import DEFAULT_OPTIONS, Options
 from gym_env.env import SnakeEnv, action_mask, bt_policy
+from rl.opponents import MixedOpponents
 
 
 @dataclass(frozen=True)
@@ -91,17 +92,26 @@ def make_env(
     monitor: bool = True,
     rewards: dict[str, float] | None = None,
     spatial: bool = False,
+    opponent_models: tuple[str, ...] | list[str] = (),
+    bt_share: float = 0.3,
 ) -> gym.Env:
     """A fresh environment for `stage` (a key of STAGES).
 
     `rewards` overrides single reward weights, e.g. {"territory": 0.02} to
     pay for holding space; see gym_env.env.DEFAULT_REWARDS. `spatial` adds
-    the three space channels to the observation.
+    the three space channels to the observation. With `opponent_models`, the
+    opponents are earlier versions of the agent mixed with the behavior tree;
+    see rl.opponents.
     """
     spec = STAGES[stage]
+    policy = (
+        MixedOpponents(opponent_models, bt_share, spec.opponent_options)
+        if opponent_models
+        else bt_policy(spec.opponent_options)
+    )
     env: gym.Env = SnakeEnv(
         opponents=spec.opponents,
-        opponent_policy=bt_policy(spec.opponent_options),
+        opponent_policy=policy,
         max_turns=max_turns,
         rewards=rewards,
         spatial=spatial,

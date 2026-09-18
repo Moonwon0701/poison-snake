@@ -22,6 +22,7 @@ from gym_env.env import ACTIONS, action_mask, behavior_tree_policy, bt_policy  #
 from rl.agent import RLPolicy  # noqa: E402
 from rl.envs import make_env  # noqa: E402
 from rl.expand import expand  # noqa: E402
+from rl.opponents import MixedOpponents  # noqa: E402
 from rl.evaluate import evaluate, report  # noqa: E402
 from rl.model import SnakeCNN  # noqa: E402
 import rl.train as rl_train  # noqa: E402
@@ -157,6 +158,28 @@ def test_expanding_a_model_keeps_the_moves_it_would_have_made(tiny_model, tmp_pa
         state, eliminated = rules.step(state, moves, rng)
         if eliminated:
             break
+
+
+def test_mixed_opponents_keep_one_brain_per_snake_per_game(tiny_model):
+    state = rules.new_game(["agent", "b"], random.Random(2))
+    game_state = rules.to_api_json(state, "b")
+
+    only_tree = MixedOpponents([], bt_share=1.0)
+    assert only_tree(game_state, random.Random(1)) == behavior_tree_policy(game_state, random.Random(1))
+
+    mixed = MixedOpponents([str(tiny_model)], bt_share=0.5)
+    brains = set()
+    for seed in range(12):  # turn 0 draws a brain for this snake each time
+        mixed(game_state, random.Random(seed))
+        brains.add(type(mixed._playing["b"]).__name__)
+    assert brains == {"RLPolicy", "function"}  # both kinds get drawn
+
+    # Later turns keep the brain drawn on turn 0.
+    state, _ = rules.step(state, {s.id: rules.non_colliding_moves(state, s.id)[0] for s in state.snakes}, random.Random(0))
+    chosen = mixed._playing["b"]
+    move = mixed(rules.to_api_json(state, "b"), random.Random(3))
+    assert mixed._playing["b"] is chosen
+    assert move in ACTIONS
 
 
 def test_evaluate_plays_exactly_the_requested_games(tiny_model):

@@ -25,6 +25,7 @@ from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecEnv
 import torch
 
 from rl.envs import STAGES, MaskCachingVecEnv, make_env
+from rl.opponents import describe
 from rl.model import new_model
 
 RUNS = Path("runs")
@@ -64,6 +65,8 @@ def build_vec_env(
     subprocess: bool = True,
     rewards: dict[str, float] | None = None,
     spatial: bool = False,
+    opponent_models: tuple[str, ...] | list[str] = (),
+    bt_share: float = 0.3,
 ) -> VecEnv:
     """n_envs copies of the stage's environment, each in its own process if `subprocess`.
 
@@ -71,7 +74,16 @@ def build_vec_env(
     most of the work, so spreading environments over CPU cores is what
     makes training fast.
     """
-    env_fns = [lambda: make_env(stage, rewards=rewards, spatial=spatial) for _ in range(n_envs)]
+    env_fns = [
+        lambda: make_env(
+            stage,
+            rewards=rewards,
+            spatial=spatial,
+            opponent_models=opponent_models,
+            bt_share=bt_share,
+        )
+        for _ in range(n_envs)
+    ]
     if subprocess and n_envs > 1:
         vec_env: VecEnv = SubprocVecEnv(env_fns, start_method="spawn")
     else:
@@ -96,6 +108,8 @@ def train(
     max_minutes: float | None = None,
     territory_reward: float = 0.0,
     spatial: bool = False,
+    opponent_models: tuple[str, ...] | list[str] = (),
+    bt_share: float = 0.3,
 ) -> Path:
     """Train for `timesteps` moves on `stage`. Returns the saved model's path.
 
@@ -109,8 +123,11 @@ def train(
     # Paying for territory teaches the snake to keep space, which is what it
     # dies for: 82% of its losses to the default trees were being trapped.
     rewards = {"territory": territory_reward} if territory_reward else None
-    env = build_vec_env(stage, n_envs, seed, subprocess, rewards, spatial)
-    # Evaluation games use seeds far from the training ones.
+    env = build_vec_env(
+        stage, n_envs, seed, subprocess, rewards, spatial, opponent_models, bt_share
+    )
+    # Evaluation games use seeds far from the training ones, and always the
+    # behavior tree, so the number stays comparable across runs.
     eval_env = build_vec_env(
         stage, min(n_envs, 8), seed + 1_000_000, subprocess, rewards, spatial
     )
@@ -162,6 +179,7 @@ def train(
         "torch_threads": torch.get_num_threads(),
         "territory_reward": territory_reward,
         "spatial": spatial,
+        "opponents": describe(opponent_models, bt_share) if opponent_models else "behavior tree",
         "seed": seed,
         "seconds": round(elapsed, 1),
         "steps_per_second": round(trained / elapsed),
@@ -193,6 +211,17 @@ def main() -> None:
         help="per turn, times our share of the board reached before any enemy",
     )
     parser.add_argument(
+        "--opponent-models",
+        default="",
+        help="comma-separated model.zip paths to play against (self-play), mixed with the tree",
+    )
+    parser.add_argument(
+        "--bt-share",
+        type=float,
+        default=0.3,
+        help="how often an opponent is the behavior tree instead of one of those models",
+    )
+    parser.add_argument(
         "--spatial",
         action="store_true",
         help="add the three space channels (needs a model with 9 input channels, see rl.expand)",
@@ -212,6 +241,8 @@ def main() -> None:
         max_minutes=args.max_minutes,
         territory_reward=args.territory_reward,
         spatial=args.spatial,
+        opponent_models=[p for p in args.opponent_models.split(",") if p],
+        bt_share=args.bt_share,
     )
 
 
