@@ -205,3 +205,52 @@ python tools\explain_game.py --simulate --agent runs\four_weak\model.zip --oppon
 - **긴 학습은 세션과 함께 죽어요.** 중간 체크포인트를 자주 저장해 두면 이어서 돌릴 수 있어요.
 - **매 스텝마다 프로세스에 뭔가 물어보면 느려져요.** 우리는 마스크를 따로 묻던 왕복을 없애고
   이미 받은 결과에서 꺼내 쓰는 것만으로 40% 빨라졌어요.
+
+---
+
+# 실전 배포와 셀프 플레이
+
+## 셀프 플레이로 고친 것
+
+리플레이를 보다가, RL 뱀이 **길이가 같은 상대 머리 바로 옆 칸으로 들어가 먹이를 가져가는** 장면을 발견했어요. 우리 BT는 이길 수 없는 머리 충돌을 **핵심 안전 규칙**으로 무조건 피하거든요. 그래서 RL이 겪은 모든 경기에서 상대가 물러났고, 그걸 배운 거예요. 물러나지 않는 상대를 만나면 둘 다 죽는 수인데도요.
+
+`rl/opponents.py`가 매 판마다 상대를 **과거의 자기 자신과 BT 중에서** 뽑아 줘요.
+
+```powershell
+python -m rl.train --stage four_default --from runs/four/model.zip --run-name selfplay `
+  --opponent-models runs/four/model.zip,runs/overnight_6/model.zip --bt-share 0.5 `
+  --spatial --territory-reward 0.02 --max-minutes 30
+```
+
+30분 돌리자 **BT 상대 승률이 35.6% → 25.4%로 떨어졌어요.** 그런데 두 모델을 직접 붙이니 **셀프 플레이 모델 58.0%, 이전 챔피언 21.2%**(대등하면 25%)였어요. 잃은 10%p는 실력이 아니라 착취분이었던 거예요.
+
+BT 비율을 50%로 올리자 둘 다 올라갔어요. **BT 상대 31.8%, 직전 모델 상대 35.7%.** 여기서 30분을 더 돌리니 오히려 나빠져서(직전 모델 상대 23.0%) 멈췄어요.
+
+**한 상대만 놓고 잰 승률은 그 상대에 대한 특화까지 함께 재요.** 자기 과거 모델과 붙이면 그게 안 통해요.
+
+## 배포 (Fly.io)
+
+배포된 뱀은 **numpy만으로 추론**해요. `rl/export.py`가 정책 가중치만 뽑고(26MB → 7.5MB), `rl/numpy_agent.py`가 그걸 돌려요. **torch와 완전히 같은 수**를 내면서(테스트로 확인) 오히려 더 빨라요(0.76ms vs 2.07ms).
+
+```powershell
+python -m rl.export runs/selfplay/model.zip models\snake.npz
+$env:SNAKE_BRAIN="rl"; python server.py     # 설정 안 하면 BT로 동작
+```
+
+| 환경 변수 | 역할 |
+|---|---|
+| `SNAKE_BRAIN` | `bt`(기본) 또는 `rl` |
+| `SNAKE_MODEL` | `rl`이 쓸 가중치 (기본 `models/snake.npz`) |
+| `SNAKE_AUTHOR`, `SNAKE_COLOR`, `SNAKE_HEAD`, `SNAKE_TAIL` | 뱀의 겉모습 |
+| `HOST`, `PORT` | 서버 주소 |
+
+신경망은 **11×11 판에만 학습**돼 있고 우리 규칙에는 유해 지역이 없어요. 그래서 판 크기가 다르거나 유해 지역이 있으면 **자동으로 BT가 대신 둬요.**
+
+```powershell
+fly auth login
+fly apps create <이름>          # fly.toml의 app = "<이름>" 수정
+fly deploy --ha=false
+fly secrets set SNAKE_AUTHOR=<사용자명> SNAKE_HEAD=silly
+```
+
+`min_machines_running = 1`로 서버를 항상 깨워 둬요. 엔진이 한 수를 약 500ms 안에 기다리는데, 잠들어 있으면 깨어나는 동안 시간이 다 가거든요. **판단 자체는 1ms도 안 걸리니 나머지는 전부 네트워크 거리예요.** 게임 서버와 가까운 리전에 올리고, 엔진 리전도 그 근처로 고르세요.
