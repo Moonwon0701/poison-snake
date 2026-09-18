@@ -2,6 +2,7 @@
 
     python -m rl.evaluate runs/four_weak/model.zip --stage four_weak --games 1000 --first-seed 100000
     python -m rl.evaluate runs/solo/model.zip --stage solo --games 200
+    python -m rl.evaluate runs/new/model.zip --stage four_default --opponent-models runs/old/model.zip
 
 Against opponents it prints the win rate with a 95% Wilson confidence
 interval. With three opponents an equally strong snake wins 25% of games,
@@ -42,6 +43,8 @@ def evaluate(
     n_envs: int = 16,
     device: str = "auto",
     subprocess: bool = True,
+    opponent_models: tuple[str, ...] | list[str] = (),
+    bt_share: float = 0.0,
 ) -> dict:
     model = MaskablePPO.load(model_path, device=device)
     n_envs = min(n_envs, games)
@@ -49,7 +52,15 @@ def evaluate(
     # Match the observation the model was trained on, with or without the
     # space channels. Reward weights don't matter here; we count wins.
     spatial = model.observation_space.shape[0] > CHANNELS
-    vec_env = build_vec_env(stage, n_envs, first_seed, subprocess, spatial=spatial)
+    vec_env = build_vec_env(
+        stage,
+        n_envs,
+        first_seed,
+        subprocess,
+        spatial=spatial,
+        opponent_models=opponent_models,
+        bt_share=bt_share,
+    )
     results: list[dict] = []
     finished = [0] * n_envs
     start = time.perf_counter()
@@ -113,8 +124,28 @@ def main() -> None:
     parser.add_argument("--first-seed", type=int, default=100_000)
     parser.add_argument("--envs", type=int, default=16)
     parser.add_argument("--device", default="auto")
+    parser.add_argument(
+        "--opponent-models",
+        default="",
+        help="comma-separated model.zip paths to play against instead of the behavior tree",
+    )
+    parser.add_argument(
+        "--bt-share",
+        type=float,
+        default=0.0,
+        help="with --opponent-models, how often an opponent is the behavior tree instead",
+    )
     args = parser.parse_args()
-    stats = evaluate(args.model, args.stage, args.games, args.first_seed, args.envs, args.device)
+    stats = evaluate(
+        args.model,
+        args.stage,
+        args.games,
+        args.first_seed,
+        args.envs,
+        args.device,
+        opponent_models=[p for p in args.opponent_models.split(",") if p],
+        bt_share=args.bt_share,
+    )
     print(report(stats))
 
 
