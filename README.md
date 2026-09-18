@@ -272,13 +272,23 @@ RTX 5070 Ti laptop (9.7M steps, roughly 2,000-2,700 steps per second):
 | duel_weak | 4.2M | wins 67.8% [63.0, 72.1] against one weak tree (even: 50%) |
 | four_weak | 1.7M | wins 59.7% [56.6, 62.7] against three weak trees (even: 25%) |
 | four_default | 2.4M | wins 7.6% [6.1, 9.4] against three default trees (even: 25%) |
+| four_default, with the territory reward and space channels | 36M | wins **35.6% [32.7, 38.6]** against three default trees |
 
-Numbers in brackets are 95% confidence intervals. The tuned behavior tree is
-still far ahead: before this last stage the same model won 2.0% against it,
-and 25 minutes of training took that to 7.6%, with games growing from 166 to
-209 turns.
+Numbers in brackets are 95% confidence intervals. The last row is the model
+to use: `runs/overnight_6/model.zip`, after nine hours of training in all.
 
-The agent dies the way the behavior tree used to. Against the default trees
-82% of its losses are being trapped (56% into its own body), while
-head-to-head collisions cause only 8%. That is what the territory reward
-above is meant to attack.
+Getting there took three things, and the order matters:
+
+1. **The territory reward** (2.0% → 7.6% → 11.6%). Being trapped caused 82%
+   of losses, and paying per turn for space attacks that directly.
+2. **The space channels** (11.6% → 12.2%, then 20.2%). The first 25 minutes
+   showed nothing; the gain only appeared with more training. Reading that
+   flat result as failure would have thrown away a good idea.
+3. **Time** (20.2% → 35.6%). Overnight, 30 minutes at a time, the agent
+   passed an even share (25%) after about 90 more minutes and peaked at three
+   hours. Training past that point did not help: at six hours it scored 32.1%.
+
+Each 30-minute chunk was scored over 1,000 games. Since the peak was picked
+by looking at twelve such scores, it was re-measured on seeds none of them
+had seen; it held (36.7% became 35.6%). Being trapped now ends 58% of its
+games, down from 82%.
