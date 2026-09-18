@@ -292,3 +292,76 @@ Each 30-minute chunk was scored over 1,000 games. Since the peak was picked
 by looking at twelve such scores, it was re-measured on seeds none of them
 had seen; it held (36.7% became 35.6%). Being trapped now ends 58% of its
 games, down from 82%.
+
+### Self-play
+
+Watching a replay showed the agent walking into cells right beside an
+equal-length enemy head to take the food. That works because *our* behavior
+tree always gives way there: refusing a head-to-head it can't win is in its
+core safety filter, not an option, so in every game the agent had ever
+played, the opponent backed off. Against a snake that doesn't, both die.
+
+`rl/opponents.py` fixes that by drawing each opponent, once per game, from
+earlier saved versions of the agent and the behavior tree:
+
+```powershell
+python -m rl.train --stage four_default --from runs/four/model.zip --run-name selfplay `
+  --opponent-models runs/four/model.zip,runs/overnight_6/model.zip --bt-share 0.5 `
+  --spatial --territory-reward 0.02 --max-minutes 30
+
+# How a model does against another model, rather than against the tree
+python -m rl.evaluate runs/selfplay/model.zip --stage four_default --games 600 `
+  --first-seed 900000 --opponent-models runs/four/model.zip
+```
+
+Half an hour of it dropped the win rate against the tree from 35.6% to
+25.4% — and that drop was the point. Played against each other, the
+self-play model won 58.0% and the old champion 21.2%, against a 25% even
+share. The 10 points it lost were the exploit, not skill.
+
+Raising the tree's share to 50% then brought both up: 31.8% against the
+tree and 35.7% against the model before it. Another half hour after that
+made it worse (23.0% against its own predecessor), so training stopped
+there.
+
+**A win rate against one fixed opponent measures how well you exploit that
+opponent as much as how well you play.** Against our own earlier models, it
+can't.
+
+## Playing on the real platform
+
+The deployed snake plays with numpy alone: `rl/export.py` writes the policy
+weights (7.5 MB, against a 26 MB checkpoint) and `rl/numpy_agent.py` runs
+them. It picks the same moves as PyTorch — a test checks that — in 0.76 ms
+rather than 2.07 ms, and the image needs no torch at all.
+
+```powershell
+python -m rl.export runs/selfplay/model.zip models\snake.npz
+$env:SNAKE_BRAIN="rl"; python server.py     # or leave it unset for the tree
+```
+
+| Variable | What it does |
+|---|---|
+| `SNAKE_BRAIN` | `bt` (default) or `rl` |
+| `SNAKE_MODEL` | weights for `rl` (default `models/snake.npz`) |
+| `SNAKE_AUTHOR`, `SNAKE_COLOR`, `SNAKE_HEAD`, `SNAKE_TAIL` | how the snake appears |
+| `HOST`, `PORT` | where to listen |
+
+The network's observation is fixed to one board size and our rules have no
+hazards, so the server falls back to the behavior tree on any board that
+isn't 11x11 or that has hazards. The tree plays any board.
+
+To deploy on [Fly.io](https://fly.io) with the included `Dockerfile` and
+`fly.toml`:
+
+```powershell
+fly auth login
+fly apps create <name>        # then set app = "<name>" in fly.toml
+fly deploy --ha=false
+fly secrets set SNAKE_AUTHOR=<your username> SNAKE_HEAD=silly
+```
+
+`min_machines_running = 1` keeps the machine awake: the engine gives up on a
+move after about 500 ms, which a cold start would blow. Deciding takes under
+a millisecond, so the rest of that budget is network travel — put the app in
+a region near the game servers, and pick the engine region closest to it.
